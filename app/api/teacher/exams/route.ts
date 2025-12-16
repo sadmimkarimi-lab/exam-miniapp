@@ -1,38 +1,51 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-const supabaseUrl =
-  process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
 
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+// (اختیاری) GET برای تست سریع
+export async function GET() {
+  const { data, error } = await supabase
+    .from("exams")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(20);
 
-if (!supabaseUrl) throw new Error("Missing SUPABASE_URL / NEXT_PUBLIC_SUPABASE_URL");
-if (!supabaseServiceKey) throw new Error("Missing SUPABASE_SERVICE_ROLE_KEY");
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
 
-const supabase = createClient(supabaseUrl, supabaseServiceKey);
+  return NextResponse.json({ exams: data });
+}
 
 export async function POST(req: Request) {
   try {
     const body = await req.json();
 
-    const title = body?.title;
-    const teacher_id_raw = body?.teacher_id;
+    // UI شما teacher_id می‌فرسته
+    const { teacher_id, title } = body;
 
-    const teacher_id = Number(teacher_id_raw);
-    if (!title || !teacher_id_raw || Number.isNaN(teacher_id)) {
+    if (!teacher_id || !title) {
       return NextResponse.json(
         { error: "teacher_id و title الزامی است" },
         { status: 400 }
       );
     }
 
+    // ✅ ستون واقعی دیتابیس: creator_user_id
+    const payload = {
+      creator_user_id: Number(teacher_id),
+      title: String(title),
+      is_published: false,
+      // duration_min: null, // اگر خواستی بعداً اضافه کن
+    };
+
     const { data, error } = await supabase
       .from("exams")
-      .insert({
-        teacher_id,
-        title,
-        is_published: false,
-      })
+      .insert(payload)
       .select("*")
       .single();
 
@@ -40,7 +53,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    return NextResponse.json({ exam: data }, { status: 200 });
+    return NextResponse.json({ exam: data });
   } catch (err: any) {
     return NextResponse.json(
       { error: err?.message || "Server Error" },
