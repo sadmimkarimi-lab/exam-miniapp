@@ -11,6 +11,7 @@ export async function POST(req: Request) {
     const body = await req.json();
     const { user_id, title } = body;
 
+    // اعتبارسنجی ورودی
     if (!user_id || !title) {
       return NextResponse.json(
         { error: "user_id و title الزامی است" },
@@ -18,6 +19,7 @@ export async function POST(req: Request) {
       );
     }
 
+    // درج آزمون
     const { data, error } = await supabase
       .from("exams")
       .insert({
@@ -38,7 +40,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ exam: data });
   } catch (err: any) {
     return NextResponse.json(
-      { error: err.message },
+      { error: err.message || "Server Error" },
       { status: 500 }
     );
   }
