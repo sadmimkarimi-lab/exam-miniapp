@@ -2,85 +2,73 @@
 
 import { useState } from "react";
 
+async function post(url: string, body: any) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const txt = await res.text();
+  try {
+    return JSON.parse(txt);
+  } catch {
+    return txt;
+  }
+}
+
 export default function Page() {
-  const [mode, setMode] = useState<"home" | "teacher" | "student">("home");
+  const [log, setLog] = useState<any>("");
+
+  async function createExam() {
+    const out = await post("/api/teacher/exams", {
+      teacher_id: 1,
+      title: "آزمون شماره ۱",
+    });
+    setLog(out);
+  }
+
+  async function addEssayQuestion() {
+    const out = await post("/api/teacher/questions", {
+      exam_id: 1,
+      type: "essay",
+      text: "به صورت تشریحی توضیح بده…",
+    });
+    setLog(out);
+  }
+
+  async function addMcqQuestion() {
+    const out = await post("/api/teacher/questions", {
+      exam_id: 1,
+      type: "mcq",
+      text: "۲ + ۲ چند می‌شود؟",
+      choices: ["1", "2", "4", "5"],
+      correct_index: 2,
+    });
+    setLog(out);
+  }
 
   return (
     <main style={{ maxWidth: 720, margin: "24px auto", padding: 16, fontFamily: "sans-serif", direction: "rtl" }}>
-      <h1 style={{ fontSize: 22, fontWeight: 800, marginBottom: 8 }}>برنامک آزمون آنلاین</h1>
-      <p style={{ opacity: 0.8, marginTop: 0 }}>
-        نسخه اولیه (MVP) — قدم‌به‌قدم کاملش می‌کنیم 😊
+      <h1 style={{ fontSize: 20, fontWeight: 800 }}>تست API (مرحله ۳)</h1>
+      <p style={{ opacity: 0.8 }}>
+        این دکمه‌ها مستقیماً API را صدا می‌زنند. نتیجه پایین نمایش داده می‌شود.
       </p>
 
-      {mode === "home" && (
-        <>
-          <div style={{ display: "grid", gap: 12, marginTop: 16 }}>
-            <button
-              onClick={() => setMode("teacher")}
-              style={{
-                padding: "14px 12px",
-                borderRadius: 12,
-                border: "1px solid #ddd",
-                fontSize: 16,
-                fontWeight: 700,
-                cursor: "pointer",
-              }}
-            >
-              👩‍🏫 ورود استاد / ساخت آزمون
-            </button>
+      <div style={{ display: "grid", gap: 10, marginTop: 16 }}>
+        <button style={{ padding: 12, borderRadius: 12, border: "1px solid #ddd" }} onClick={createExam}>
+          1) ساخت آزمون
+        </button>
+        <button style={{ padding: 12, borderRadius: 12, border: "1px solid #ddd" }} onClick={addEssayQuestion}>
+          2) افزودن سوال تشریحی (برای exam_id=1)
+        </button>
+        <button style={{ padding: 12, borderRadius: 12, border: "1px solid #ddd" }} onClick={addMcqQuestion}>
+          3) افزودن سوال چهارگزینه‌ای (برای exam_id=1)
+        </button>
+      </div>
 
-            <button
-              onClick={() => setMode("student")}
-              style={{
-                padding: "14px 12px",
-                borderRadius: 12,
-                border: "1px solid #ddd",
-                fontSize: 16,
-                fontWeight: 700,
-                cursor: "pointer",
-              }}
-            >
-              🧑‍🎓 ورود دانش‌آموز / شرکت در آزمون
-            </button>
-          </div>
-
-          <div style={{ marginTop: 18, fontSize: 13, opacity: 0.75, lineHeight: 1.7 }}>
-            <div>✅ سایت روی Vercel اجرا می‌شود</div>
-            <div>✅ API سالم است</div>
-            <div>🔜 مرحله بعد: اتصال واقعی به دیتابیس + فرم‌های ساخت آزمون</div>
-          </div>
-        </>
-      )}
-
-      {mode === "teacher" && (
-        <section style={{ marginTop: 16, padding: 12, border: "1px solid #eee", borderRadius: 12 }}>
-          <h2 style={{ fontSize: 16, fontWeight: 800, marginTop: 0 }}>پنل استاد (فعلاً ساده)</h2>
-          <p style={{ marginTop: 6, opacity: 0.85, lineHeight: 1.8 }}>
-            اینجا در مرحله بعد:
-            <br />• ساخت آزمون
-            <br />• افزودن سوال چهارگزینه‌ای
-            <br />• انتشار آزمون
-          </p>
-          <button onClick={() => setMode("home")} style={{ padding: "10px 12px", borderRadius: 10, border: "1px solid #ddd" }}>
-            ⬅️ برگشت
-          </button>
-        </section>
-      )}
-
-      {mode === "student" && (
-        <section style={{ marginTop: 16, padding: 12, border: "1px solid #eee", borderRadius: 12 }}>
-          <h2 style={{ fontSize: 16, fontWeight: 800, marginTop: 0 }}>پنل دانش‌آموز (فعلاً ساده)</h2>
-          <p style={{ marginTop: 6, opacity: 0.85, lineHeight: 1.8 }}>
-            اینجا در مرحله بعد:
-            <br />• لیست آزمون‌های منتشرشده
-            <br />• شروع آزمون
-            <br />• ثبت پاسخ‌ها و دیدن نتیجه
-          </p>
-          <button onClick={() => setMode("home")} style={{ padding: "10px 12px", borderRadius: 10, border: "1px solid #ddd" }}>
-            ⬅️ برگشت
-          </button>
-        </section>
-      )}
+      <pre style={{ marginTop: 16, padding: 12, borderRadius: 12, background: "#f6f6f6", overflowX: "auto" }}>
+        {typeof log === "string" ? log : JSON.stringify(log, null, 2)}
+      </pre>
     </main>
   );
 }
