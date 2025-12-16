@@ -1,10 +1,9 @@
-import { supabaseAdmin } from "../../../lib/supabase";
+import { supabaseAdmin } from "../../lib/supabase";
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const action = url.searchParams.get("action");
 
-  // تست دیتابیس: ساخت/خواندن یک کاربر تست
   if (action === "dbtest") {
     const eitaa_user_id = "TEST_10001";
 
@@ -42,7 +41,6 @@ export async function GET(req: Request) {
     return new Response("DB OK ✅ user_id=" + user.id, { status: 200 });
   }
 
-  // حالت پیش‌فرض
   return new Response("API OK", { status: 200 });
 }
 
