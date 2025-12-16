@@ -9,21 +9,20 @@ const supabase = createClient(
 export async function POST(req: Request) {
   try {
     const body = await req.json();
-    const { user_id, title } = body;
+    const { teacher_id, title } = body;
 
     // اعتبارسنجی ورودی
-    if (!user_id || !title) {
+    if (!teacher_id || !title) {
       return NextResponse.json(
-        { error: "user_id و title الزامی است" },
+        { error: "teacher_id و title الزامی است" },
         { status: 400 }
       );
     }
 
-    // درج آزمون
     const { data, error } = await supabase
       .from("exams")
       .insert({
-        user_id,
+        teacher_id,
         title,
         is_published: false,
       })
@@ -31,16 +30,13 @@ export async function POST(req: Request) {
       .single();
 
     if (error) {
-      return NextResponse.json(
-        { error: error.message },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    return NextResponse.json({ exam: data });
+    return NextResponse.json({ exam: data }, { status: 200 });
   } catch (err: any) {
     return NextResponse.json(
-      { error: err.message || "Server Error" },
+      { error: err?.message || "Server Error" },
       { status: 500 }
     );
   }
