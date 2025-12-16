@@ -8,12 +8,20 @@ async function post(url: string, body: any) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
+
   const txt = await res.text();
+
+  let parsed: any = txt;
   try {
-    return JSON.parse(txt);
-  } catch {
-    return txt;
-  }
+    parsed = JSON.parse(txt);
+  } catch {}
+
+  // برای اینکه هم status رو ببینی هم خروجی رو
+  return {
+    ok: res.ok,
+    status: res.status,
+    data: parsed,
+  };
 }
 
 export default function Page() {
@@ -21,7 +29,8 @@ export default function Page() {
 
   async function createExam() {
     const out = await post("/api/teacher/exams", {
-      user_id: 1, // 👈 مهم: قبلاً teacher_id بود
+      // ✅ مطابق route.ts جدید شما
+      user_id: 1,
       title: "آزمون شماره ۱",
     });
     setLog(out);
@@ -57,25 +66,31 @@ export default function Page() {
         direction: "rtl",
       }}
     >
-      <h1 style={{ fontSize: 20, fontWeight: 800 }}>
-        تست API (مرحله ۳)
-      </h1>
-
+      <h1 style={{ fontSize: 20, fontWeight: 800 }}>تست API (مرحله ۳)</h1>
       <p style={{ opacity: 0.8 }}>
-        این دکمه‌ها مستقیماً API را صدا می‌زنند. نتیجه پایین نمایش داده می‌شود.
+        این دکمه‌ها مستقیم API را صدا می‌زنند. نتیجه پایین نمایش داده می‌شود.
       </p>
 
       <div style={{ display: "grid", gap: 10, marginTop: 16 }}>
-        <button onClick={createExam}>
+        <button
+          style={{ padding: 12, borderRadius: 12, border: "1px solid #ddd" }}
+          onClick={createExam}
+        >
           1) ساخت آزمون
         </button>
 
-        <button onClick={addEssayQuestion}>
-          2) افزودن سوال تشریحی
+        <button
+          style={{ padding: 12, borderRadius: 12, border: "1px solid #ddd" }}
+          onClick={addEssayQuestion}
+        >
+          2) افزودن سوال تشریحی (برای exam_id=1)
         </button>
 
-        <button onClick={addMcqQuestion}>
-          3) افزودن سوال چهارگزینه‌ای
+        <button
+          style={{ padding: 12, borderRadius: 12, border: "1px solid #ddd" }}
+          onClick={addMcqQuestion}
+        >
+          3) افزودن سوال چهارگزینه‌ای (برای exam_id=1)
         </button>
       </div>
 
@@ -88,9 +103,7 @@ export default function Page() {
           overflowX: "auto",
         }}
       >
-        {typeof log === "string"
-          ? log
-          : JSON.stringify(log, null, 2)}
+        {typeof log === "string" ? log : JSON.stringify(log, null, 2)}
       </pre>
     </main>
   );
