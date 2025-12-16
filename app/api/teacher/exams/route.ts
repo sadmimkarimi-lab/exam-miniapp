@@ -15,11 +15,9 @@ export async function POST(req: Request) {
   try {
     const body = await req.json();
 
-    // ورودی‌ها
     const title = body?.title;
     const teacher_id_raw = body?.teacher_id;
 
-    // اعتبارسنجی
     const teacher_id = Number(teacher_id_raw);
     if (!title || !teacher_id_raw || Number.isNaN(teacher_id)) {
       return NextResponse.json(
@@ -28,7 +26,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // درج آزمون
     const { data, error } = await supabase
       .from("exams")
       .insert({
