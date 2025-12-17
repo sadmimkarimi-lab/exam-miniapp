@@ -1,147 +1,77 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-type Choice = { id: number; text: string; question_id?: number };
+type Choice = {
+  id: number;
+  question_id: number;
+  text: string;
+};
+
 type Question = {
   id: number;
   exam_id: number;
   text: string;
+  type: string; // "mcq" | "desc" (هرچی تو دیتابیس داری)
   score: number;
-  type?: string; // "mcq" | "essay" | ...
   choices?: Choice[];
+  selected_choice_id?: number | null;
 };
 
-// بعضی وقتا API ممکنه این شکلی بده: { question: {...}, choices: [...] }
-type QuestionWithChoices = { question: Question; choices?: Choice[] };
-
-function normalizeQuestions(data: any): Question[] {
-  const list = Array.isArray(data) ? data : Array.isArray(data?.questions) ? data.questions : [];
-
-  // حالت 1: مستقیم Question[] با choices داخلش
-  if (list.length && list[0]?.id && (list[0]?.text || list[0]?.choices)) return list as Question[];
-
-  // حالت 2: QuestionWithChoices[]
-  if (list.length && list[0]?.question?.id) {
-    return (list as QuestionWithChoices[]).map((x) => ({
-      ...x.question,
-      choices: x.choices ?? x.question.choices ?? [],
-    }));
-  }
-
-  return [];
-}
+type GradeResult = {
+  ok: boolean;
+  exam_id: number;
+  student_id: number;
+  score: number;
+  total_score: number;
+  correct_count: number;
+  total_questions: number;
+  saved?: boolean;
+};
 
 export default function StudentPage() {
-  // فعلاً ثابت (بعداً لاگین می‌کنیم)
-  const EXAM_ID = 1;
-  const STUDENT_ID = 1;
-
-  const [loading, setLoading] = useState(false);
-  const [finishing, setFinishing] = useState(false);
+  // فعلاً ثابت (بعداً می‌تونی از querystring یا login بگیری)
+  const examId = 1;
+  const studentId = 1;
 
   const [questions, setQuestions] = useState<Question[]>([]);
-  const [selected, setSelected] = useState<Record<number, number>>({}); // question_id -> choice_id
+  const [loading, setLoading] = useState(false);
+  const [savingAnswerId, setSavingAnswerId] = useState<number | null>(null);
 
-  const [status, setStatus] = useState<string>(""); // پیام‌های بالا
-  const [error, setError] = useState<string>("");
+  const [fetchError, setFetchError] = useState<string>("");
+  const [actionError, setActionError] = useState<string>("");
 
-  const [result, setResult] = useState<null | { score: number; total: number }>(null);
+  const [gradeLoading, setGradeLoading] = useState(false);
+  const [gradeResult, setGradeResult] = useState<GradeResult | null>(null);
 
-  const totalScore = useMemo(() => {
-    return questions.reduce((sum, q) => sum + (q.score ?? 0), 0);
-  }, [questions]);
+  const totalScore = useMemo(
+    () => questions.reduce((sum, q) => sum + (q.score ?? 0), 0),
+    [questions]
+  );
 
   async function fetchQuestions() {
     setLoading(true);
-    setError("");
-    setStatus("");
-    setResult(null);
+    setFetchError("");
+    setActionError("");
+    setGradeResult(null);
 
     try {
-      // ✅ روت درست برای دانش‌آموز
-      // اگر روتت POST-only بود، پایین fallback گذاشتم.
-      let res = await fetch(`/api/student/questions?exam_id=${EXAM_ID}`, {
-        method: "GET",
-        cache: "no-store",
-      });
+      const res = await fetch(
+        `/api/student/questions?exam_id=${examId}&student_id=${studentId}`,
+        { method: "GET", cache: "no-store" }
+      );
 
-      if (res.status === 405) {
-        // fallback: بعضی‌ها روت سوالات رو POST می‌سازن
-        res = await fetch(`/api/student/questions`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ exam_id: EXAM_ID }),
-          cache: "no-store",
-        });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || `Failed to fetch questions (${res.status})`);
       }
 
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || `Failed to fetch questions (${res.status})`);
-
-      const qs = normalizeQuestions(data);
-      setQuestions(qs);
-      setSelected({});
-      if (qs.length === 0) setStatus("سوالی پیدا نشد. اول با دکمه‌های معلم چند سوال اضافه کن 😉");
+      setQuestions(Array.isArray(data?.questions) ? data.questions : []);
     } catch (e: any) {
+      setFetchError(e?.message || "Failed to fetch questions");
       setQuestions([]);
-      setError(e?.message || "خطا در گرفتن سوالات");
     } finally {
       setLoading(false);
-    }
-  }
-
-  async function submitAnswer(questionId: number, choiceId: number) {
-    // UI فوری آپدیت بشه
-    setSelected((prev) => ({ ...prev, [questionId]: choiceId }));
-    setError("");
-    setStatus("در حال ثبت پاسخ...");
-
-    try {
-      const res = await fetch("/api/student/answers", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          student_id: STUDENT_ID,
-          question_id: questionId,
-          selected_choice_id: choiceId,
-        }),
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || `ثبت پاسخ ناموفق بود (${res.status})`);
-
-      setStatus("✅ پاسخ ثبت شد");
-      // پیام رو خیلی زود پاک نکنیم
-      setTimeout(() => setStatus(""), 800);
-    } catch (e: any) {
-      setError(e?.message || "ثبت پاسخ ناموفق بود");
-      setStatus("");
-    }
-  }
-
-  async function finishAndGrade() {
-    setFinishing(true);
-    setError("");
-    setStatus("");
-
-    try {
-      // ✅ روت درستِ تصحیح: /api/student/grade (POST-only)
-      const res = await fetch("/api/student/grade", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ student_id: STUDENT_ID, exam_id: EXAM_ID }),
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error || `تصحیح انجام نشد (${res.status})`);
-
-      setResult({ score: data.score ?? 0, total: data.total ?? totalScore ?? 0 });
-      setStatus("✅ آزمون تصحیح شد");
-    } catch (e: any) {
-      setError(e?.message || "تصحیح انجام نشد");
-    } finally {
-      setFinishing(false);
     }
   }
 
@@ -150,105 +80,187 @@ export default function StudentPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  async function selectChoice(questionId: number, choiceId: number) {
+    setActionError("");
+    setSavingAnswerId(questionId);
+
+    // optimistic UI
+    setQuestions((prev) =>
+      prev.map((q) =>
+        q.id === questionId ? { ...q, selected_choice_id: choiceId } : q
+      )
+    );
+
+    try {
+      const res = await fetch("/api/student/answers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          student_id: studentId,
+          question_id: questionId,
+          selected_choice_id: choiceId,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || `Save failed (${res.status})`);
+    } catch (e: any) {
+      setActionError(e?.message || "ثبت پاسخ انجام نشد");
+      // rollback: دوباره از سرور بگیر تا درست شه
+      await fetchQuestions();
+    } finally {
+      setSavingAnswerId(null);
+    }
+  }
+
+  async function finishAndGrade() {
+    setActionError("");
+    setGradeResult(null);
+    setGradeLoading(true);
+
+    try {
+      const res = await fetch("/api/student/grade", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ student_id: studentId, exam_id: examId }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || `تصحیح انجام نشد (${res.status})`);
+
+      setGradeResult(data as GradeResult);
+    } catch (e: any) {
+      setActionError(e?.message || "تصحیح انجام نشد");
+    } finally {
+      setGradeLoading(false);
+    }
+  }
+
   return (
-    <main className="mx-auto max-w-2xl px-4 py-8" style={{ direction: "rtl" }}>
-      <h1 className="text-3xl font-black text-center">صفحه دانش‌آموز</h1>
-      <p className="text-center mt-2 text-gray-600">
-        آزمون #{EXAM_ID} — دانش‌آموز #{STUDENT_ID}
-      </p>
+    <main className="min-h-screen bg-white text-slate-900">
+      <div className="mx-auto max-w-2xl px-4 py-8">
+        <header className="text-center space-y-2">
+          <h1 className="text-4xl font-black">صفحه دانش‌آموز</h1>
+          <p className="text-slate-600">
+            آزمون #{examId} — دانش‌آموز #{studentId}
+          </p>
+        </header>
 
-      <div className="mt-6 flex gap-3 justify-center">
-        <button
-          onClick={finishAndGrade}
-          disabled={finishing}
-          className="px-5 py-3 rounded-2xl bg-black text-white font-bold disabled:opacity-60"
-        >
-          {finishing ? "در حال تصحیح..." : "✅ پایان آزمون و تصحیح"}
-        </button>
+        <div className="mt-6 flex items-center justify-center gap-3">
+          <button
+            onClick={finishAndGrade}
+            disabled={gradeLoading || loading}
+            className="rounded-2xl px-5 py-3 font-bold shadow-sm border border-slate-200 bg-black text-white disabled:opacity-60"
+          >
+            ✅ پایان آزمون و تصحیح
+          </button>
 
-        <button
-          onClick={fetchQuestions}
-          disabled={loading}
-          className="px-5 py-3 rounded-2xl border font-bold disabled:opacity-60"
-        >
-          {loading ? "..." : "🔁 فرش سوالات"}
-        </button>
-      </div>
-
-      {(error || status) && (
-        <div
-          className={`mt-4 rounded-2xl p-4 text-center border ${
-            error ? "bg-red-50 border-red-200 text-red-700" : "bg-gray-50 border-gray-200"
-          }`}
-        >
-          {error || status}
+          <button
+            onClick={fetchQuestions}
+            disabled={loading || gradeLoading}
+            className="rounded-2xl px-5 py-3 font-bold shadow-sm border border-slate-200 bg-white disabled:opacity-60"
+          >
+            🔁 فرش سوالات
+          </button>
         </div>
-      )}
 
-      <div className="mt-6 text-center text-gray-700">
-        مجموع امتیاز آزمون: <span className="font-black">{totalScore}</span>
-      </div>
-
-      {result && (
-        <div className="mt-4 rounded-2xl p-5 border bg-green-50 border-green-200 text-center">
-          <div className="text-xl font-black">🎉 نتیجه آزمون</div>
-          <div className="mt-2 text-lg">
-            نمره: <span className="font-black">{result.score}</span> از{" "}
-            <span className="font-black">{result.total}</span>
+        {fetchError ? (
+          <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-red-700 font-semibold text-center">
+            {fetchError}
           </div>
+        ) : null}
+
+        {actionError ? (
+          <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-800 font-semibold text-center">
+            {actionError}
+          </div>
+        ) : null}
+
+        <div className="mt-6 text-center text-slate-700">
+          <span className="font-bold">مجموع امتیاز آزمون:</span> {totalScore}
         </div>
-      )}
 
-      <div className="mt-8 space-y-4">
-        {questions.map((q) => {
-          const isMcq = (q.type || "").toLowerCase() === "mcq";
-          const chosen = selected[q.id];
-
-          return (
-            <div key={q.id} className="rounded-2xl border p-5">
-              <div className="flex justify-between items-center">
-                <div className="text-lg font-black">
-                  سوال {q.id} {q.type ? <span className="opacity-70">({q.type})</span> : null}
-                </div>
-                <div className="text-sm text-gray-600">امتیاز: {q.score ?? 0}</div>
-              </div>
-
-              <div className="mt-3 text-gray-800 leading-7">{q.text}</div>
-
-              {isMcq ? (
-                <div className="mt-4 space-y-3">
-                  {(q.choices ?? []).map((c) => {
-                    const active = chosen === c.id;
-                    return (
-                      <button
-                        key={c.id}
-                        onClick={() => submitAnswer(q.id, c.id)}
-                        className={`w-full text-right rounded-2xl border px-4 py-3 font-semibold ${
-                          active ? "bg-blue-50 border-blue-300" : "bg-white"
-                        }`}
-                      >
-                        <span className="inline-flex items-center gap-2">
-                          {active ? "✅" : "⬜️"} {c.text}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="mt-4 rounded-2xl border bg-gray-50 p-4 text-gray-600">
-                  این سوال تشریحی است (فعلاً برای تشریحی UI ارسال جواب نداریم).
-                </div>
-              )}
+        {gradeResult ? (
+          <div className="mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-4 text-center">
+            <div className="text-lg font-black">🎉 نتیجه آزمون</div>
+            <div className="mt-2 text-2xl font-black">
+              نمره: {gradeResult.score} از {gradeResult.total_score}
             </div>
-          );
-        })}
-      </div>
+            <div className="mt-1 text-slate-700">
+              تعداد درست: {gradeResult.correct_count} از {gradeResult.total_questions}
+              {typeof gradeResult.saved === "boolean" ? (
+                <span className="ml-2">
+                  — {gradeResult.saved ? "✅ ذخیره شد" : "⚠️ ذخیره نشد"}
+                </span>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
 
-      {!loading && questions.length === 0 && !error && (
-        <div className="mt-10 text-center text-gray-600">
-          سوالی پیدا نشد. اول با دکمه‌های معلم چند سوال اضافه کن 😉
-        </div>
-      )}
+        <section className="mt-8 space-y-5">
+          {loading ? (
+            <div className="text-center text-slate-600 font-semibold">
+              در حال گرفتن سوالات...
+            </div>
+          ) : null}
+
+          {!loading && questions.length === 0 ? (
+            <div className="text-center text-slate-600 font-semibold">
+              سوالی پیدا نشد. اول با دکمه‌های معلم سوال اضافه کن 😉
+            </div>
+          ) : null}
+
+          {questions.map((q) => {
+            const isMCQ = (q.type || "").toLowerCase() === "mcq";
+            return (
+              <div
+                key={q.id}
+                className="rounded-2xl border border-slate-200 bg-white shadow-sm p-4"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-lg font-black">
+                    سوال {q.id} {isMCQ ? "(mcq)" : ""}
+                  </div>
+                  <div className="text-slate-600 font-bold">امتیاز: {q.score}</div>
+                </div>
+
+                <div className="mt-2 text-slate-800 leading-7">{q.text}</div>
+
+                {!isMCQ ? (
+                  <div className="mt-3 text-slate-500 text-sm">
+                    (این سوال تشریحی است — فعلاً تصحیح خودکار ندارد)
+                  </div>
+                ) : (
+                  <div className="mt-4 grid gap-3">
+                    {(q.choices || []).map((c) => {
+                      const selected = q.selected_choice_id === c.id;
+                      return (
+                        <button
+                          key={c.id}
+                          onClick={() => selectChoice(q.id, c.id)}
+                          disabled={savingAnswerId === q.id}
+                          className={[
+                            "rounded-2xl border px-4 py-3 text-right font-semibold shadow-sm",
+                            selected
+                              ? "border-blue-300 bg-blue-50"
+                              : "border-slate-200 bg-white hover:bg-slate-50",
+                            savingAnswerId === q.id ? "opacity-60" : "",
+                          ].join(" ")}
+                        >
+                          <div className="flex items-center justify-between gap-3">
+                            <span>{c.text}</span>
+                            {selected ? <span>✅</span> : <span className="opacity-0">✅</span>}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </section>
+      </div>
     </main>
   );
 }
