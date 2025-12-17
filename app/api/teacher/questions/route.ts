@@ -6,59 +6,80 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
+/**
+ * GET /api/teacher/questions?exam_id=1
+ * برای صفحه دانش‌آموز
+ */
+export async function GET(req: Request) {
+  const { searchParams } = new URL(req.url);
+  const exam_id = searchParams.get("exam_id");
 
-export async function POST(req: Request) {
-  const body = await req.json();
-  const { exam_id, type, text } = body; // type: "mcq" | "essay"
-
-  if (!exam_id || !type || !text) {
-    return NextResponse.json({ error: "exam_id و type و text لازم است" }, { status: 400 });
-  }
-
-  // سوال را در جدول questions ذخیره می‌کنیم
-  const { data: q, error: qErr } = await supabase
-    .from("questions")
-    .insert({ exam_id, text })
-    .select("*")
-    .single();
-
-  if (qErr) return NextResponse.json({ error: qErr.message }, { status: 500 });
-
-  // اگر تشریحی باشد، همینجا تمام
-  if (type === "essay") {
-    return NextResponse.json({ question: q, type });
-  }
-
-  // اگر چهارگزینه‌ای باشد باید choices و correct_answer هم بیاید
-  const { choices, correct_index } = body; // choices: ["A","B","C","D"], correct_index: 0..3
-
-  if (!Array.isArray(choices) || choices.length < 2 || correct_index === undefined) {
+  if (!exam_id) {
     return NextResponse.json(
-      { error: "برای mcq باید choices و correct_index بفرستی" },
+      { error: "exam_id is required" },
       { status: 400 }
     );
   }
 
-  // ذخیره گزینه‌ها
-  const rows = choices.map((t: string) => ({ question_id: q.id, text: String(t) }));
-  const { data: insertedChoices, error: cErr } = await supabase
-    .from("choices")
-    .insert(rows)
-    .select("*");
+  const { data, error } = await supabase
+    .from("questions")
+    .select(
+      `
+      *,
+      choices (*)
+    `
+    )
+    .eq("exam_id", exam_id)
+    .order("id", { ascending: true });
 
-  if (cErr) return NextResponse.json({ error: cErr.message }, { status: 500 });
-
-  const correctChoice = insertedChoices?.[Number(correct_index)];
-  if (!correctChoice?.id) {
-    return NextResponse.json({ error: "correct_index نامعتبر است" }, { status: 400 });
+  if (error) {
+    return NextResponse.json(
+      { error: error.message },
+      { status: 500 }
+    );
   }
 
-  // ذخیره جواب درست (مخفی)
-  const { error: aErr } = await supabase
-    .from("correct_answers")
-    .insert({ question_id: q.id, correct_choice_id: correctChoice.id });
+  // فرمت مناسب UI دانش‌آموز
+  const result = data.map((q: any) => ({
+    question: {
+      id: q.id,
+      exam_id: q.exam_id,
+      text: q.text,
+      score: q.score,
+      type: q.type,
+    },
+    choices: q.choices ?? [],
+  }));
 
-  if (aErr) return NextResponse.json({ error: aErr.message }, { status: 500 });
+  return NextResponse.json(result);
+}
 
-  return NextResponse.json({ question: q, type, choices: insertedChoices });
+/**
+ * POST /api/teacher/questions
+ * برای معلم (قبلاً داشتی، دست نمی‌زنیم)
+ */
+export async function POST(req: Request) {
+  const body = await req.json();
+
+  const { exam_id, text, score, type } = body;
+
+  const { data, error } = await supabase
+    .from("questions")
+    .insert({
+      exam_id,
+      text,
+      score,
+      type,
+    })
+    .select()
+    .single();
+
+  if (error) {
+    return NextResponse.json(
+      { error: error.message },
+      { status: 500 }
+    );
+  }
+
+  return NextResponse.json(data);
 }
