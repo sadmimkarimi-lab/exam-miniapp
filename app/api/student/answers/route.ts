@@ -17,15 +17,17 @@ export async function POST(req: Request) {
       );
     }
 
-    // آیا قبلاً جواب داده؟
-    const { data: existing } = await supabase
+    // اگر قبلاً برای این سوال جواب داده → update
+    const { data: existing, error: existingErr } = await supabase
       .from("student_answers")
       .select("id")
       .eq("student_id", student_id)
       .eq("question_id", question_id)
-      .single();
+      .maybeSingle();
 
-    if (existing) {
+    if (existingErr) throw existingErr;
+
+    if (existing?.id) {
       const { data, error } = await supabase
         .from("student_answers")
         .update({ selected_choice_id })
@@ -37,7 +39,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ updated: true, answer: data });
     }
 
-    // ثبت جواب جدید
+    // در غیر اینصورت insert
     const { data, error } = await supabase
       .from("student_answers")
       .insert({
@@ -52,7 +54,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ created: true, answer: data });
   } catch (err: any) {
     return NextResponse.json(
-      { error: err.message ?? "Server error" },
+      { error: err?.message ?? "Server error" },
       { status: 500 }
     );
   }
