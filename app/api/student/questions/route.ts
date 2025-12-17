@@ -6,57 +6,58 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-// GET /api/student/questions?exam_id=1
 export async function GET(req: Request) {
   try {
-    const { searchParams } = new URL(req.url);
-    const exam_id = Number(searchParams.get("exam_id"));
+    const url = new URL(req.url);
+    const exam_id = Number(url.searchParams.get("exam_id"));
+    const student_id = Number(url.searchParams.get("student_id"));
 
-    if (!exam_id || Number.isNaN(exam_id)) {
-      return NextResponse.json({ error: "exam_id لازم است" }, { status: 400 });
+    if (!exam_id || !student_id) {
+      return NextResponse.json(
+        { error: "Missing exam_id or student_id" },
+        { status: 400 }
+      );
     }
 
+    // سوالات + گزینه‌ها
     const { data: questions, error: qErr } = await supabase
       .from("questions")
-      .select("id, exam_id, type, text, score")
+      .select(
+        "id, exam_id, text, type, score, choices(id, question_id, text)"
+      )
       .eq("exam_id", exam_id)
       .order("id", { ascending: true });
 
-    if (qErr) return NextResponse.json({ error: qErr.message }, { status: 500 });
+    if (qErr) throw qErr;
 
-    const qIds = (questions ?? []).map((q) => q.id);
-    let choices: any[] = [];
+    const questionIds = (questions ?? []).map((q: any) => q.id);
 
-    if (qIds.length) {
-      const { data: ch, error: cErr } = await supabase
-        .from("choices")
-        .select("id, question_id, text")
-        .in("question_id", qIds)
-        .order("id", { ascending: true });
+    // جواب‌های قبلی دانش‌آموز (برای نمایش انتخاب قبلی)
+    let answers: any[] = [];
+    if (questionIds.length > 0) {
+      const { data: aData, error: aErr } = await supabase
+        .from("student_answers")
+        .select("question_id, selected_choice_id")
+        .eq("student_id", student_id)
+        .in("question_id", questionIds);
 
-      if (cErr) return NextResponse.json({ error: cErr.message }, { status: 500 });
-      choices = ch ?? [];
+      if (aErr) throw aErr;
+      answers = aData ?? [];
     }
 
-    const choicesByQ: Record<number, any[]> = {};
-    for (const c of choices) {
-      const qid = c.question_id as number;
-      if (!choicesByQ[qid]) choicesByQ[qid] = [];
-      choicesByQ[qid].push({ id: c.id, text: c.text });
-    }
+    const answerMap = new Map<number, number>();
+    answers.forEach((a: any) => answerMap.set(a.question_id, a.selected_choice_id));
 
-    const payload = (questions ?? []).map((q) => ({
-      id: q.id,
-      exam_id: q.exam_id,
-      type: q.type,
-      text: q.text,
-      score: q.score,
-      choices: choicesByQ[q.id] ?? [],
+    const merged = (questions ?? []).map((q: any) => ({
+      ...q,
+      selected_choice_id: answerMap.get(q.id) ?? null,
     }));
 
-    // مهم: هیچ correct_answers برنمی‌گردونیم (برای امنیت)
-    return NextResponse.json({ exam_id, questions: payload }, { status: 200 });
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message || "Server error" }, { status: 500 });
+    return NextResponse.json({ questions: merged });
+  } catch (err: any) {
+    return NextResponse.json(
+      { error: err?.message ?? "Server error" },
+      { status: 500 }
+    );
   }
 }
