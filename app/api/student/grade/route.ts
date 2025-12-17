@@ -17,7 +17,7 @@ export async function POST(req: Request) {
       );
     }
 
-    // 1) سوالات آزمون
+    // 1) سوالات آزمون (برای total_score و score هر سوال)
     const { data: questions, error: qErr } = await supabase
       .from("questions")
       .select("id, score")
@@ -25,18 +25,26 @@ export async function POST(req: Request) {
 
     if (qErr) throw qErr;
 
-    const questionIds = (questions ?? []).map((q) => q.id);
+    const questionIds = (questions ?? []).map((q: any) => q.id);
+    const total_score = (questions ?? []).reduce(
+      (sum: number, q: any) => sum + (q.score ?? 0),
+      0
+    );
+
     if (questionIds.length === 0) {
-      return NextResponse.json(
-        { error: "No questions found for this exam" },
-        { status: 404 }
-      );
+      return NextResponse.json({
+        ok: true,
+        exam_id,
+        student_id,
+        score: 0,
+        total_score,
+        correct_count: 0,
+        total_questions: 0,
+        saved: false,
+      });
     }
 
-    // برای محاسبه total
-    const total = (questions ?? []).reduce((sum, q) => sum + (q.score ?? 0), 0);
-
-    // 2) جواب‌های دانش‌آموز برای همین سوال‌ها
+    // 2) جواب‌های دانش‌آموز
     const { data: answers, error: aErr } = await supabase
       .from("student_answers")
       .select("question_id, selected_choice_id")
@@ -46,9 +54,9 @@ export async function POST(req: Request) {
     if (aErr) throw aErr;
 
     const answerMap = new Map<number, number>();
-    (answers ?? []).forEach((a: any) => {
-      answerMap.set(a.question_id, a.selected_choice_id);
-    });
+    (answers ?? []).forEach((a: any) =>
+      answerMap.set(a.question_id, a.selected_choice_id)
+    );
 
     // 3) جواب‌های صحیح
     const { data: corrects, error: cErr } = await supabase
@@ -59,59 +67,54 @@ export async function POST(req: Request) {
     if (cErr) throw cErr;
 
     const correctMap = new Map<number, number>();
-    (corrects ?? []).forEach((c: any) => {
-      correctMap.set(c.question_id, c.correct_choice_id);
-    });
+    (corrects ?? []).forEach((c: any) =>
+      correctMap.set(c.question_id, c.correct_choice_id)
+    );
 
-    // 4) محاسبه نمره
+    // 4) محاسبه
     let score = 0;
-    let correctCount = 0;
+    let correct_count = 0;
 
     for (const q of questions ?? []) {
       const chosen = answerMap.get(q.id);
-      const correctChoice = correctMap.get(q.id);
+      const correct = correctMap.get(q.id);
 
-      if (chosen && correctChoice && chosen === correctChoice) {
+      if (chosen && correct && chosen === correct) {
+        correct_count += 1;
         score += q.score ?? 0;
-        correctCount += 1;
       }
     }
 
-    const questionCount = questionIds.length;
+    // 5) ذخیره نتیجه (اگر جدول/ستون‌ها مطابق نباشه، فقط نتیجه رو برمی‌گردونیم)
+    let saved = false;
+    try {
+      // اگر unique روی (student_id, exam_id) داری بهتره upsert کنی
+      const { error: rErr } = await supabase.from("exam_results").upsert(
+        {
+          student_id,
+          exam_id,
+          score,
+          total_score,
+          correct_count,
+          total_questions: (questions ?? []).length,
+        },
+        { onConflict: "student_id,exam_id" }
+      );
 
-    // 5) ذخیره در exam_results (insert or update)
-    const { data: existingResult, error: er1 } = await supabase
-      .from("exam_results")
-      .select("id")
-      .eq("student_id", student_id)
-      .eq("exam_id", exam_id)
-      .maybeSingle();
-
-    if (er1) throw er1;
-
-    if (existingResult?.id) {
-      const { error: updErr } = await supabase
-        .from("exam_results")
-        .update({ score, total })
-        .eq("id", existingResult.id);
-
-      if (updErr) throw updErr;
-    } else {
-      const { error: insErr } = await supabase
-        .from("exam_results")
-        .insert({ student_id, exam_id, score, total });
-
-      if (insErr) throw insErr;
+      if (!rErr) saved = true;
+    } catch {
+      saved = false;
     }
 
     return NextResponse.json({
       ok: true,
-      student_id,
       exam_id,
+      student_id,
       score,
-      total,
-      correctCount,
-      questionCount,
+      total_score,
+      correct_count,
+      total_questions: (questions ?? []).length,
+      saved,
     });
   } catch (err: any) {
     return NextResponse.json(
