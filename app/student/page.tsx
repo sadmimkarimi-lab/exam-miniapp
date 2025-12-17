@@ -52,9 +52,11 @@ export default function StudentPage() {
       // اینجا مستقیم از API معلم استفاده نمی‌کنیم؛
       // از supabase route عمومی خود پروژه‌ات هم اگر داری می‌تونی وصل کنی.
       // فعلاً از یک endpoint ساده استفاده می‌کنیم: /api/teacher/questions?exam_id=1
-      const res = await fetch(`/api/teacher/questions?exam_id=${examId}`, {
-        cache: "no-store",
-      });
+      const res = await fetch("/api/teacher/questions", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ exam_id: examId }),
+});
 
       if (!res.ok) {
         const t = await res.text();
