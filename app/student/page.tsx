@@ -2,68 +2,75 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-type Choice = { id: number; text: string };
+type Choice = {
+  id: number;
+  question_id: number;
+  text: string;
+};
+
 type Question = {
   id: number;
   exam_id: number;
-  type: string; // "mcq" | "essay" | ...
   text: string;
   score: number;
-  choices: Choice[];
+  type?: string | null;
+  choices?: Choice[];
 };
 
-// خروجی‌های احتمالی grade (چون قبلاً چند مدل ساختیم)
-type GradeResponse = {
-  ok?: boolean;
-  error?: string;
-  meta?: { score?: number; total?: number; answeredCount?: number };
-  result?: { score?: number; total?: number };
-  // بعضی نسخه‌ها اینا رو مستقیم می‌دن
-  score?: number;
-  total?: number;
+type GradeResult = {
+  ok: boolean;
+  student_id: number;
+  exam_id: number;
+  score: number;
+  total: number;
+  correctCount: number;
+  questionCount: number;
 };
 
 export default function StudentPage() {
-  // فعلاً دستی (بعداً با ایتا/لاگین واقعی می‌کنیم)
-  const EXAM_ID = 1;
-  const STUDENT_ID = 1;
+  const studentId = 1;
+  const examId = 1;
 
   const [loading, setLoading] = useState(true);
   const [questions, setQuestions] = useState<Question[]>([]);
+  const [selected, setSelected] = useState<Record<number, number>>({});
   const [msg, setMsg] = useState<string>("");
-
-  // وضعیت انتخاب‌های دانش‌آموز در UI (برای اینکه بفهمه چی انتخاب کرده)
-  const [picked, setPicked] = useState<Record<number, number>>({}); // {question_id: choice_id}
-
-  // وضعیت تصحیح
+  const [grade, setGrade] = useState<GradeResult | null>(null);
   const [grading, setGrading] = useState(false);
-  const [gradeError, setGradeError] = useState<string>("");
-  const [gradeResult, setGradeResult] = useState<{ score: number; total: number } | null>(null);
 
-  const mcqCount = useMemo(
-    () => questions.filter((q) => (q.type ?? "mcq") === "mcq").length,
+  const total = useMemo(
+    () => questions.reduce((s, q) => s + (q.score ?? 0), 0),
     [questions]
   );
 
   async function loadQuestions() {
     setLoading(true);
     setMsg("");
-    setGradeError("");
-    setGradeResult(null);
+    setGrade(null);
 
-    const res = await fetch(`/api/student/questions?exam_id=${EXAM_ID}`, { cache: "no-store" });
-    const data = await res.json();
+    try {
+      // اینجا مستقیم از API معلم استفاده نمی‌کنیم؛
+      // از supabase route عمومی خود پروژه‌ات هم اگر داری می‌تونی وصل کنی.
+      // فعلاً از یک endpoint ساده استفاده می‌کنیم: /api/teacher/questions?exam_id=1
+      const res = await fetch(`/api/teacher/questions?exam_id=${examId}`, {
+        cache: "no-store",
+      });
 
-    if (!res.ok) {
-      setMsg(data?.error || "خطا در گرفتن سوالات");
-      setQuestions([]);
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t || `Failed to fetch questions (${res.status})`);
+      }
+
+      const data = await res.json();
+
+      // انتظار داریم data.questions یا data خودش آرایه باشه
+      const list: Question[] = Array.isArray(data) ? data : data.questions ?? [];
+      setQuestions(list);
+    } catch (e: any) {
+      setMsg(e?.message ?? "خطا در گرفتن سوالات");
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const qs: Question[] = data.questions || [];
-    setQuestions(qs);
-    setLoading(false);
   }
 
   useEffect(() => {
@@ -71,225 +78,192 @@ export default function StudentPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function answer(question_id: number, selected_choice_id: number) {
-    setMsg("در حال ثبت پاسخ...");
+  async function submitAnswer(questionId: number, choiceId: number) {
+    setMsg("");
 
-    // UI رو سریع آپدیت می‌کنیم (حس بهتر)
-    setPicked((prev) => ({ ...prev, [question_id]: selected_choice_id }));
+    // optimistic UI
+    setSelected((prev) => ({ ...prev, [questionId]: choiceId }));
 
     const res = await fetch("/api/student/answers", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        student_id: STUDENT_ID,
-        question_id,
-        selected_choice_id,
+        student_id: studentId,
+        question_id: questionId,
+        selected_choice_id: choiceId,
       }),
     });
 
-    const data = await res.json();
-
     if (!res.ok) {
-      setMsg(data?.error || "ثبت پاسخ ناموفق بود");
-      return;
+      const data = await res.json().catch(() => null);
+      setMsg(data?.error ?? "ثبت پاسخ ناموفق بود");
+    } else {
+      setMsg("✅ پاسخ ثبت شد");
+      setTimeout(() => setMsg(""), 1200);
     }
-
-    setMsg("✅ پاسخ ثبت شد");
   }
 
-  async function gradeExam() {
+  async function finishAndGrade() {
     setGrading(true);
-    setGradeError("");
-    setGradeResult(null);
+    setMsg("");
+    setGrade(null);
 
     try {
       const res = await fetch("/api/student/grade", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ student_id: STUDENT_ID, exam_id: EXAM_ID }),
+        body: JSON.stringify({ student_id: studentId, exam_id: examId }),
       });
 
-      const data: GradeResponse = await res.json();
+      const data = await res.json();
 
       if (!res.ok) {
-        setGradeError(data?.error || "خطا در تصحیح آزمون");
-        return;
+        throw new Error(data?.error ?? "تصحیح ناموفق بود");
       }
 
-      // سازگاری با خروجی‌های مختلف
-      const score =
-        data?.meta?.score ??
-        data?.result?.score ??
-        data?.score ??
-        0;
-
-      const total =
-        data?.meta?.total ??
-        data?.result?.total ??
-        data?.total ??
-        0;
-
-      setGradeResult({ score: Number(score), total: Number(total) });
-      setMsg("✅ آزمون تصحیح شد");
+      setGrade(data);
+      setMsg("✅ آزمون تصحیح شد و نتیجه ذخیره شد");
     } catch (e: any) {
-      setGradeError(e?.message || "خطای ناشناخته");
+      setMsg(e?.message ?? "خطا در تصحیح");
     } finally {
       setGrading(false);
     }
   }
 
   return (
-    <main
-      style={{
-        maxWidth: 720,
-        margin: "24px auto",
-        padding: 16,
-        direction: "rtl",
-        fontFamily: "sans-serif",
-      }}
-    >
-      <header style={{ display: "grid", gap: 6, marginBottom: 14 }}>
-        <h1 style={{ fontSize: 20, fontWeight: 800, margin: 0 }}>صفحه دانش‌آموز</h1>
-        <p style={{ opacity: 0.85, margin: 0 }}>
-          آزمون #{EXAM_ID} — دانش‌آموز #{STUDENT_ID}
-        </p>
+    <div style={{ maxWidth: 520, margin: "0 auto", padding: 16, direction: "rtl" }}>
+      <h2 style={{ textAlign: "center", marginBottom: 6 }}>صفحه دانش‌آموز</h2>
+      <div style={{ textAlign: "center", marginBottom: 12, opacity: 0.8 }}>
+        آزمون #{examId} — دانش‌آموز #{studentId}
+      </div>
 
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 8 }}>
-          <button
-            onClick={loadQuestions}
-            style={{
-              padding: "10px 12px",
-              borderRadius: 10,
-              border: "1px solid #ddd",
-              background: "#fff",
-            }}
-          >
-            🔄 رفرش سوالات
-          </button>
+      <div style={{ display: "flex", gap: 10, marginBottom: 14 }}>
+        <button
+          onClick={finishAndGrade}
+          disabled={grading || loading}
+          style={{
+            flex: 1,
+            padding: 12,
+            borderRadius: 12,
+            border: "1px solid #ddd",
+            background: "#111",
+            color: "#fff",
+            fontWeight: 700,
+          }}
+        >
+          {grading ? "در حال تصحیح..." : "✅ پایان آزمون و تصحیح"}
+        </button>
 
-          <button
-            onClick={gradeExam}
-            disabled={grading || questions.length === 0 || mcqCount === 0}
-            style={{
-              padding: "10px 12px",
-              borderRadius: 10,
-              border: "1px solid #ddd",
-              background: grading ? "#f3f3f3" : "#111",
-              color: grading ? "#777" : "#fff",
-              cursor: grading ? "not-allowed" : "pointer",
-            }}
-            title={mcqCount === 0 ? "فعلاً فقط سوالات چهارگزینه‌ای تصحیح می‌شوند" : ""}
-          >
-            {grading ? "در حال تصحیح..." : "✅ پایان آزمون و تصحیح"}
-          </button>
-        </div>
-      </header>
-
-      {/* پیام‌های عمومی */}
-      {msg ? (
-        <div
+        <button
+          onClick={loadQuestions}
+          disabled={loading || grading}
           style={{
             padding: 12,
             borderRadius: 12,
-            background: "#f5f5f5",
-            marginBottom: 12,
-            border: "1px solid #eee",
+            border: "1px solid #ddd",
+            background: "#fff",
+            fontWeight: 700,
+          }}
+        >
+          ↩️ فرش سوالات
+        </button>
+      </div>
+
+      {msg && (
+        <div
+          style={{
+            marginBottom: 14,
+            padding: 12,
+            borderRadius: 12,
+            border: "1px solid #e5e5e5",
+            background: "#f8f8f8",
           }}
         >
           {msg}
         </div>
-      ) : null}
-
-      {/* نتیجه تصحیح */}
-      {gradeError ? (
-        <div
-          style={{
-            padding: 12,
-            borderRadius: 12,
-            background: "#fff5f5",
-            marginBottom: 12,
-            border: "1px solid #ffd0d0",
-            color: "crimson",
-          }}
-        >
-          ❌ {gradeError}
-        </div>
-      ) : null}
-
-      {gradeResult ? (
-        <div
-          style={{
-            padding: 12,
-            borderRadius: 12,
-            background: "#f6ffed",
-            marginBottom: 12,
-            border: "1px solid #b7eb8f",
-          }}
-        >
-          <div style={{ fontWeight: 800 }}>🎉 نتیجه آزمون</div>
-          <div style={{ marginTop: 6 }}>
-            نمره: <b>{gradeResult.score}</b> از <b>{gradeResult.total}</b>
-          </div>
-        </div>
-      ) : null}
-
-      {/* محتوای سوالات */}
-      {loading ? (
-        <p>در حال بارگذاری…</p>
-      ) : questions.length === 0 ? (
-        <p>سوالی پیدا نشد. (اول با دکمه‌های معلم چند سوال بساز)</p>
-      ) : (
-        questions.map((q) => (
-          <div
-            key={q.id}
-            style={{
-              border: "1px solid #ddd",
-              borderRadius: 12,
-              padding: 12,
-              marginBottom: 12,
-              background: "#fff",
-            }}
-          >
-            <div style={{ fontWeight: 800, marginBottom: 6 }}>
-              سوال {q.id} ({q.type})
-            </div>
-
-            <div style={{ marginBottom: 10 }}>{q.text}</div>
-
-            {(q.type ?? "mcq") === "mcq" ? (
-              <div style={{ display: "grid", gap: 8 }}>
-                {q.choices.map((c) => {
-                  const isPicked = picked[q.id] === c.id;
-                  return (
-                    <button
-                      key={c.id}
-                      onClick={() => answer(q.id, c.id)}
-                      style={{
-                        padding: 10,
-                        borderRadius: 10,
-                        border: "1px solid #ccc",
-                        textAlign: "right",
-                        background: isPicked ? "#e6f4ff" : "#fff",
-                      }}
-                    >
-                      {isPicked ? "✅ " : ""}
-                      {c.text}
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <p style={{ opacity: 0.7, margin: 0 }}>
-                (فعلاً برای تشریحی UI نداریم. تصحیح تشریحی بعداً با پنل استاد اضافه می‌شود.)
-              </p>
-            )}
-          </div>
-        ))
       )}
 
-      <footer style={{ opacity: 0.7, marginTop: 18, fontSize: 12 }}>
-        نکته: تصحیح خودکار فعلاً فقط برای سوالات <b>چهارگزینه‌ای</b> انجام می‌شود.
-      </footer>
-    </main>
+      {grade && (
+        <div
+          style={{
+            marginBottom: 14,
+            padding: 14,
+            borderRadius: 14,
+            border: "1px solid #bfe7bf",
+            background: "#f1fff1",
+          }}
+        >
+          <div style={{ fontSize: 18, fontWeight: 900, marginBottom: 6 }}>
+            🎉 نتیجه آزمون
+          </div>
+          <div style={{ fontSize: 20, fontWeight: 900 }}>
+            نمره: {grade.score} از {grade.total}
+          </div>
+          <div style={{ opacity: 0.85, marginTop: 6 }}>
+            درست‌ها: {grade.correctCount} از {grade.questionCount}
+          </div>
+        </div>
+      )}
+
+      {loading ? (
+        <div style={{ padding: 16, textAlign: "center" }}>در حال گرفتن سوالات...</div>
+      ) : (
+        questions.map((q, idx) => {
+          const qType = (q.type ?? "mcq").toLowerCase();
+          const isMcq = qType === "mcq";
+
+          return (
+            <div
+              key={q.id}
+              style={{
+                border: "1px solid #e7e7e7",
+                borderRadius: 16,
+                padding: 14,
+                marginBottom: 14,
+                background: "#fff",
+              }}
+            >
+              <div style={{ fontWeight: 900, marginBottom: 10 }}>
+                سوال {idx + 1} ({qType}) — امتیاز: {q.score ?? 0}
+              </div>
+
+              <div style={{ marginBottom: 12, lineHeight: 1.9 }}>{q.text}</div>
+
+              {!isMcq ? (
+                <div style={{ opacity: 0.75 }}>
+                  (فعلاً سوال تشریحی رو فقط نمایش می‌دیم. اگر خواستی، مرحله بعد ذخیره پاسخ تشریحی رو هم اضافه می‌کنیم.)
+                </div>
+              ) : (
+                <div style={{ display: "grid", gap: 10 }}>
+                  {(q.choices ?? []).map((c) => {
+                    const active = selected[q.id] === c.id;
+                    return (
+                      <button
+                        key={c.id}
+                        onClick={() => submitAnswer(q.id, c.id)}
+                        style={{
+                          padding: 12,
+                          borderRadius: 14,
+                          border: active ? "2px solid #111" : "1px solid #ddd",
+                          background: active ? "#eaf3ff" : "#fff",
+                          textAlign: "right",
+                          fontWeight: 700,
+                        }}
+                      >
+                        {active ? "✅ " : ""}{c.text}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })
+      )}
+
+      <div style={{ textAlign: "center", opacity: 0.6, marginTop: 10 }}>
+        مجموع امتیاز آزمون: {total}
+      </div>
+    </div>
   );
 }
