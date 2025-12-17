@@ -1,119 +1,101 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/supabase";
+import React, { useEffect, useMemo, useState } from "react";
 
-type QuestionType = "mcq" | "desc";
-
-type QuestionRow = {
-  id: number;
-  exam_id: number;
-  text: string;
-  score: number | null;
-  type: QuestionType | null;
-  created_at?: string;
-};
-
-type ChoiceRow = {
+type Choice = {
   id: number;
   question_id: number;
   text: string;
+  is_correct?: boolean; // ممکنه از API نیاد
+};
+
+type Question = {
+  id: number;
+  exam_id: number;
+  text: string;
+  score: number;
+  type?: "mcq" | "desc" | string; // برای اینکه خطا نده
   created_at?: string;
 };
 
-type QuestionWithChoices = QuestionRow & {
-  choices: ChoiceRow[];
+type QuestionWithChoices = {
+  question: Question;
+  choices?: Choice[];
 };
 
 export default function StudentPage() {
-  // فعلاً ثابت؛ بعداً می‌تونیم از querystring/route params بگیریم
+  // فعلا ثابت (مثل چیزی که تو UI نشون دادی)
   const examId = 1;
   const studentId = 1;
 
-  const [loading, setLoading] = useState(true);
-  const [fetchError, setFetchError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [finishing, setFinishing] = useState(false);
 
   const [questions, setQuestions] = useState<QuestionWithChoices[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  // انتخاب‌های کاربر (در لحظه)
   const [selected, setSelected] = useState<Record<number, number>>({}); // question_id -> choice_id
 
-  const [submitting, setSubmitting] = useState(false);
-  const [finishMsg, setFinishMsg] = useState<string | null>(null);
+  // نتیجه‌ی تصحیح
+  const [result, setResult] = useState<null | {
+    totalScore: number;
+    maxScore: number;
+    statusText?: string;
+  }>(null);
 
-  const [result, setResult] = useState<{
-    total: number;
-    correct: number;
-    score: number;
-  } | null>(null);
-
-  const totalScore = useMemo(() => {
-    return questions.reduce((sum, q) => sum + (q.score ?? 1), 0);
+  const maxScore = useMemo(() => {
+    return questions.reduce((sum, q) => sum + (q.question.score ?? 0), 0);
   }, [questions]);
 
   async function fetchQuestions() {
     setLoading(true);
-    setFetchError(null);
+    setError(null);
+    setResult(null);
 
     try {
-      // 1) سوال‌ها
-      const { data: qData, error: qErr } = await supabase
-        .from("questions")
-        .select("id, exam_id, text, score, type, created_at")
-        .eq("exam_id", examId)
-        .order("id", { ascending: true });
+      // 👇 فرض: این روت GET رو پشتیبانی می‌کنه
+      const res = await fetch(`/api/teacher/questions?exam_id=${examId}`, {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+      });
 
-      if (qErr) throw new Error(qErr.message);
-
-      const qs = (qData ?? []) as QuestionRow[];
-
-      if (qs.length === 0) {
-        setQuestions([]);
-        setLoading(false);
-        return;
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(`Failed to fetch questions (${res.status}) ${txt}`);
       }
 
-      // 2) گزینه‌ها (فقط برای سوال‌های mcq هم می‌گیریم، مشکلی نداره)
-      const qIds = qs.map((q) => q.id);
+      const data = await res.json();
 
-      const { data: cData, error: cErr } = await supabase
-        .from("choices")
-        .select("id, question_id, text, created_at")
-        .in("question_id", qIds)
-        .order("id", { ascending: true });
+      // دیتا ممکنه یکی از این شکل‌ها باشه:
+      // 1) { questions: [...] }
+      // 2) [...]
+      const list: QuestionWithChoices[] = Array.isArray(data)
+        ? data
+        : Array.isArray(data?.questions)
+        ? data.questions
+        : [];
 
-      if (cErr) throw new Error(cErr.message);
+      setQuestions(list);
 
-      const choices = (cData ?? []) as ChoiceRow[];
-
-      // 3) ترکیب
-      const map = new Map<number, ChoiceRow[]>();
-      for (const c of choices) {
-        if (!map.has(c.question_id)) map.set(c.question_id, []);
-        map.get(c.question_id)!.push(c);
-      }
-
-      const merged: QuestionWithChoices[] = qs.map((q) => ({
-        ...q,
-        type: (q.type ?? "mcq") as QuestionType, // اگر null بود، فرض می‌گیریم mcq
-        score: q.score ?? 1,
-        choices: map.get(q.id) ?? [],
-      }));
-
-      setQuestions(merged);
+      // اگر API خودش قبلاً selected رو می‌فرسته، اینجا می‌تونی پر کنی.
+      // فعلا چیزی نمی‌خوایم GET بزنیم به answers چون روتش POST-only هست.
+      setSelected({});
     } catch (e: any) {
-      setFetchError(e?.message ?? "Failed to fetch questions");
+      setError(e?.message ?? "Error");
+      setQuestions([]);
     } finally {
       setLoading(false);
     }
   }
 
-  async function saveAnswer(questionId: number, choiceId: number) {
-    // UI state
+  async function submitAnswer(questionId: number, choiceId: number) {
+    // UI فوری آپدیت بشه
     setSelected((prev) => ({ ...prev, [questionId]: choiceId }));
-    setFinishMsg(null);
 
-    // ذخیره در DB با API که فقط POST دارد
     try {
-      const res = await fetch("/api/student/answers", {
+      const res = await fetch(`/api/student/answers`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -124,86 +106,49 @@ export default function StudentPage() {
       });
 
       if (!res.ok) {
-        const t = await res.text();
-        throw new Error(`Save failed (${res.status}): ${t}`);
+        const txt = await res.text().catch(() => "");
+        throw new Error(`ثبت پاسخ ناموفق بود (${res.status}) ${txt}`);
       }
     } catch (e: any) {
-      // اگر ذخیره fail شد، پیام بده ولی انتخاب رو نگه می‌داریم
-      setFinishMsg(e?.message ?? "خطا در ثبت پاسخ");
+      // اگر ثبت جواب شکست خورد، همون انتخاب UI رو نگه می‌داریم ولی پیام خطا می‌دیم
+      setError(e?.message ?? "خطا در ثبت پاسخ");
     }
   }
 
   async function finishAndGrade() {
-    setSubmitting(true);
-    setFinishMsg(null);
+    setFinishing(true);
+    setError(null);
 
     try {
-      // 1) correct_answers برای سوال‌های همین آزمون
-      const qIds = questions.map((q) => q.id);
-
-      const { data: caData, error: caErr } = await supabase
-        .from("correct_answers")
-        .select("question_id, correct_choice_id")
-        .in("question_id", qIds);
-
-      if (caErr) throw new Error(caErr.message);
-
-      const correctMap = new Map<number, number>();
-      for (const row of caData ?? []) {
-        correctMap.set(row.question_id, row.correct_choice_id);
-      }
-
-      // 2) محاسبه
-      let correctCount = 0;
-      let score = 0;
-      let total = 0;
-
-      for (const q of questions) {
-        // فقط سوال‌های mcq که correct_answer دارند را نمره می‌دهیم
-        if (q.type !== "mcq") continue;
-
-        const correctChoice = correctMap.get(q.id);
-        if (!correctChoice) continue;
-
-        total += q.score ?? 1;
-
-        const picked = selected[q.id];
-        if (picked && picked === correctChoice) {
-          correctCount += 1;
-          score += q.score ?? 1;
-        }
-      }
-
-      setResult({ total, correct: correctCount, score });
-
-      // 3) ذخیره نتیجه در exam_results (اگر جدول رو داری)
-      // ستون‌ها رو فرض گرفتیم: exam_id, student_id, score, total_score, created_at
-      const { error: insErr } = await supabase.from("exam_results").insert({
-        exam_id: examId,
-        student_id: studentId,
-        score,
-        total_score: total,
+      // ✅ مرحله ۳: پیشنهاد استاندارد اینه که تصحیح توی سرور انجام بشه
+      // اگر هنوز این روت رو نساختی، پایین همین پیام میگم دقیقاً چی باید باشه.
+      const res = await fetch(`/api/student/finish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          exam_id: examId,
+          student_id: studentId,
+        }),
       });
 
-      if (insErr) {
-        // اگر ستونا فرق داره، فقط پیام می‌دیم
-        setFinishMsg(
-          `نمره محاسبه شد ✅ ولی ذخیره نتیجه مشکل داشت: ${insErr.message}`
-        );
-      } else {
-        setFinishMsg("✅ آزمون تصحیح شد و نتیجه ذخیره شد");
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        throw new Error(`تصحیح انجام نشد (${res.status}) ${txt}`);
       }
-    } catch (e: any) {
-      setFinishMsg(e?.message ?? "خطا در تصحیح آزمون");
-    } finally {
-      setSubmitting(false);
-    }
-  }
 
-  function resetLocal() {
-    setSelected({});
-    setResult(null);
-    setFinishMsg(null);
+      const data = await res.json();
+
+      // انتظار: { totalScore, maxScore, statusText? }
+      setResult({
+        totalScore: Number(data?.totalScore ?? 0),
+        maxScore: Number(data?.maxScore ?? maxScore),
+        statusText: data?.statusText ?? "آزمون تصحیح شد ✅",
+      });
+    } catch (e: any) {
+      setError(e?.message ?? "خطا در تصحیح");
+    } finally {
+      setFinishing(false);
+    }
   }
 
   useEffect(() => {
@@ -212,189 +157,153 @@ export default function StudentPage() {
   }, []);
 
   return (
-    <main
-      style={{
-        maxWidth: 720,
-        margin: "0 auto",
-        padding: "24px 16px 64px",
-        direction: "rtl",
-        fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, Arial",
-      }}
-    >
-      <header style={{ textAlign: "center", marginBottom: 18 }}>
-        <h1 style={{ fontSize: 28, margin: "8px 0" }}>صفحه دانش‌آموز</h1>
-        <div style={{ opacity: 0.7 }}>آزمون #{examId} — دانش‌آموز #{studentId}</div>
-      </header>
+    <div style={{ maxWidth: 860, margin: "0 auto", padding: 16, direction: "rtl" }}>
+      <h1 style={{ fontSize: 32, fontWeight: 800, textAlign: "center", marginTop: 8 }}>
+        صفحه دانش‌آموز
+      </h1>
+      <div style={{ textAlign: "center", marginTop: 6, opacity: 0.8 }}>
+        آزمون #{examId} — دانش‌آموز #{studentId}
+      </div>
 
-      <div style={{ display: "flex", gap: 10, justifyContent: "center", marginBottom: 14 }}>
+      <div style={{ display: "flex", gap: 12, justifyContent: "center", marginTop: 18 }}>
         <button
           onClick={fetchQuestions}
           disabled={loading}
-          style={btnStyle("secondary")}
+          style={{
+            padding: "10px 14px",
+            borderRadius: 12,
+            border: "1px solid #ddd",
+            background: "#fff",
+            cursor: loading ? "not-allowed" : "pointer",
+            minWidth: 150,
+          }}
         >
           ↩️ فرش سوالات
         </button>
 
         <button
           onClick={finishAndGrade}
-          disabled={loading || submitting || questions.length === 0}
-          style={btnStyle("primary")}
+          disabled={finishing || questions.length === 0}
+          style={{
+            padding: "10px 14px",
+            borderRadius: 12,
+            border: "1px solid #111",
+            background: "#111",
+            color: "#fff",
+            cursor: finishing ? "not-allowed" : "pointer",
+            minWidth: 220,
+          }}
         >
           ✅ پایان آزمون و تصحیح
         </button>
-
-        <button
-          onClick={resetLocal}
-          disabled={loading || submitting}
-          style={btnStyle("secondary")}
-        >
-          🔄 ریست انتخاب‌ها
-        </button>
       </div>
 
-      {fetchError && (
-        <div style={alertStyle("error")}>
-          {fetchError}
-        </div>
-      )}
-
-      {finishMsg && (
-        <div style={alertStyle("info")}>
-          {finishMsg}
+      {error && (
+        <div
+          style={{
+            marginTop: 14,
+            padding: 12,
+            borderRadius: 12,
+            border: "1px solid #f2c2c2",
+            background: "#fff5f5",
+            color: "#8a1f1f",
+            textAlign: "center",
+            whiteSpace: "pre-wrap",
+          }}
+        >
+          {error}
         </div>
       )}
 
       {result && (
-        <div style={resultCard}>
-          <div style={{ fontSize: 20, fontWeight: 700 }}>🎉 نتیجه آزمون</div>
-          <div style={{ marginTop: 6 }}>
-            درست: <b>{result.correct}</b>
-          </div>
-          <div style={{ marginTop: 6 }}>
-            نمره: <b>{result.score}</b> از <b>{result.total}</b>
+        <div
+          style={{
+            marginTop: 14,
+            padding: 14,
+            borderRadius: 16,
+            border: "1px solid #bfe6bf",
+            background: "#f3fff3",
+            textAlign: "center",
+            fontWeight: 700,
+          }}
+        >
+          <div style={{ marginBottom: 6 }}>{result.statusText}</div>
+          <div style={{ fontSize: 20 }}>
+            🎉 نتیجه آزمون — نمره: {result.totalScore} از {result.maxScore}
           </div>
         </div>
       )}
 
-      <div style={{ marginTop: 18, opacity: 0.75 }}>
-        مجموع امتیاز آزمون (براساس سوال‌ها): {totalScore}
+      <div style={{ marginTop: 18, opacity: 0.8, textAlign: "center" }}>
+        مجموع امتیاز آزمون: {maxScore}
       </div>
 
-      <section style={{ marginTop: 14 }}>
+      <div style={{ marginTop: 18, display: "grid", gap: 16 }}>
         {loading ? (
-          <div style={{ padding: 16, opacity: 0.7 }}>در حال دریافت سوالات...</div>
+          <div style={{ textAlign: "center", marginTop: 40 }}>در حال دریافت سوالات...</div>
         ) : questions.length === 0 ? (
-          <div style={{ padding: 16, opacity: 0.7 }}>
-            سوالی پیدا نشد. (اول با دکمه‌های معلم چند سوال بساز)
+          <div style={{ textAlign: "center", marginTop: 40 }}>
+            سوالی پیدا نشد. اول با دکمه‌های معلم سوال اضافه کن 😉
           </div>
         ) : (
-          questions.map((q) => (
-            <div key={q.id} style={card}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                <div style={{ fontWeight: 700 }}>
-                  سوال {q.id}{" "}
-                  {q.type === "mcq" ? <span style={{ opacity: 0.6 }}>(mcq)</span> : <span style={{ opacity: 0.6 }}>(تشریحی)</span>}
+          questions.map((qwrap) => {
+            const q = qwrap.question;
+            const qType = q.type ?? "mcq";
+            const isMcq = qType === "mcq";
+
+            return (
+              <div
+                key={q.id}
+                style={{
+                  border: "1px solid #eee",
+                  borderRadius: 16,
+                  padding: 16,
+                  background: "#fff",
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                  <div style={{ fontWeight: 800, fontSize: 18 }}>
+                    سوال {q.id} ({qType})
+                  </div>
+                  <div style={{ opacity: 0.7 }}>امتیاز: {q.score ?? 0}</div>
                 </div>
-                <div style={{ opacity: 0.65 }}>امتیاز: {q.score ?? 1}</div>
+
+                <div style={{ marginTop: 10, fontSize: 16 }}>{q.text}</div>
+
+                {isMcq ? (
+                  <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+                    {(qwrap.choices ?? []).map((c) => {
+                      const picked = selected[q.id] === c.id;
+                      return (
+                        <button
+                          key={c.id}
+                          onClick={() => submitAnswer(q.id, c.id)}
+                          style={{
+                            padding: "12px 12px",
+                            borderRadius: 14,
+                            border: picked ? "2px solid #7aa7ff" : "1px solid #ddd",
+                            background: picked ? "#eaf2ff" : "#fff",
+                            cursor: "pointer",
+                            textAlign: "right",
+                            fontSize: 16,
+                          }}
+                        >
+                          {picked ? "✅ " : ""}
+                          {c.text}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div style={{ marginTop: 10, opacity: 0.8 }}>
+                    (فعلاً سوال تشریحی فقط نمایش داده می‌شود)
+                  </div>
+                )}
               </div>
-
-              <div style={{ marginTop: 10, fontSize: 16 }}>{q.text}</div>
-
-              {q.type === "desc" ? (
-                <div style={{ marginTop: 10, padding: 12, borderRadius: 12, background: "#fafafa", opacity: 0.8 }}>
-                  این سوال تشریحی است (فعلاً توی نسخه‌ی ساده، فقط نمایش داده می‌شود).
-                </div>
-              ) : (
-                <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
-                  {q.choices.map((c) => {
-                    const isPicked = selected[q.id] === c.id;
-                    return (
-                      <button
-                        key={c.id}
-                        onClick={() => saveAnswer(q.id, c.id)}
-                        disabled={submitting}
-                        style={{
-                          ...choiceBtn,
-                          ...(isPicked ? pickedChoice : {}),
-                        }}
-                      >
-                        <span>{c.text}</span>
-                        {isPicked && <span style={{ marginRight: 8 }}>✅</span>}
-                      </button>
-                    );
-                  })}
-                  {q.choices.length === 0 && (
-                    <div style={{ opacity: 0.7 }}>
-                      برای این سوال گزینه‌ای ثبت نشده.
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          ))
+            );
+          })
         )}
-      </section>
-    </main>
+      </div>
+    </div>
   );
 }
-
-function btnStyle(kind: "primary" | "secondary"): React.CSSProperties {
-  const base: React.CSSProperties = {
-    border: "1px solid #ddd",
-    padding: "12px 14px",
-    borderRadius: 14,
-    cursor: "pointer",
-    fontWeight: 700,
-    minWidth: 150,
-  };
-  if (kind === "primary") {
-    return { ...base, background: "#111", color: "#fff", borderColor: "#111" };
-  }
-  return { ...base, background: "#fff", color: "#111" };
-}
-
-function alertStyle(kind: "error" | "info"): React.CSSProperties {
-  return {
-    marginTop: 10,
-    padding: "12px 14px",
-    borderRadius: 14,
-    border: "1px solid",
-    borderColor: kind === "error" ? "#ffb4b4" : "#c7d2fe",
-    background: kind === "error" ? "#fff1f1" : "#eef2ff",
-    color: "#111",
-  };
-}
-
-const card: React.CSSProperties = {
-  marginTop: 14,
-  border: "1px solid #e7e7e7",
-  borderRadius: 18,
-  padding: 16,
-  background: "#fff",
-};
-
-const choiceBtn: React.CSSProperties = {
-  border: "1px solid #e6e6e6",
-  borderRadius: 14,
-  padding: "14px 14px",
-  background: "#fff",
-  cursor: "pointer",
-  textAlign: "right",
-  display: "flex",
-  justifyContent: "space-between",
-  alignItems: "center",
-  fontSize: 15,
-};
-
-const pickedChoice: React.CSSProperties = {
-  background: "#e8f3ff",
-  borderColor: "#b6dcff",
-};
-
-const resultCard: React.CSSProperties = {
-  marginTop: 12,
-  padding: 16,
-  borderRadius: 18,
-  border: "1px solid #b7f0c1",
-  background: "#f1fff3",
-};
