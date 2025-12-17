@@ -12,7 +12,7 @@ export async function POST(req: Request) {
 
     if (!student_id || !exam_id) {
       return NextResponse.json(
-        { error: "Missing required fields: student_id, exam_id" },
+        { error: "Missing student_id or exam_id" },
         { status: 400 }
       );
     }
@@ -20,31 +20,23 @@ export async function POST(req: Request) {
     // 1) سوالات آزمون
     const { data: questions, error: qErr } = await supabase
       .from("questions")
-      .select("id, score, type")
+      .select("id, score")
       .eq("exam_id", exam_id);
 
     if (qErr) throw qErr;
-    if (!questions || questions.length === 0) {
+
+    const questionIds = (questions ?? []).map((q) => q.id);
+    if (questionIds.length === 0) {
       return NextResponse.json(
         { error: "No questions found for this exam" },
         { status: 404 }
       );
     }
 
-    const questionIds = questions.map((q) => q.id);
+    // برای محاسبه total
+    const total = (questions ?? []).reduce((sum, q) => sum + (q.score ?? 0), 0);
 
-    // 2) پاسخ‌های درست
-    const { data: corrects, error: cErr } = await supabase
-      .from("correct_answers")
-      .select("question_id, correct_choice_id")
-      .in("question_id", questionIds);
-
-    if (cErr) throw cErr;
-
-    const correctMap = new Map<number, number>();
-    (corrects ?? []).forEach((r) => correctMap.set(r.question_id, r.correct_choice_id));
-
-    // 3) پاسخ‌های دانش‌آموز
+    // 2) جواب‌های دانش‌آموز برای همین سوال‌ها
     const { data: answers, error: aErr } = await supabase
       .from("student_answers")
       .select("question_id, selected_choice_id")
@@ -54,57 +46,76 @@ export async function POST(req: Request) {
     if (aErr) throw aErr;
 
     const answerMap = new Map<number, number>();
-    (answers ?? []).forEach((a) => answerMap.set(a.question_id, a.selected_choice_id));
-
-    // 4) محاسبه نمره (فعلاً فقط MCQ)
-    let total = 0;
-    let score = 0;
-
-    const details = questions.map((q) => {
-      total += q.score ?? 1;
-
-      const correctChoiceId = correctMap.get(q.id);
-      const selectedChoiceId = answerMap.get(q.id);
-
-      const isMcq = (q.type ?? "mcq") === "mcq"; // اگر type نداری، پیشفرض mcq
-      const isCorrect =
-        isMcq && correctChoiceId != null && selectedChoiceId != null
-          ? selectedChoiceId === correctChoiceId
-          : false;
-
-      if (isCorrect) score += q.score ?? 1;
-
-      return {
-        question_id: q.id,
-        selected_choice_id: selectedChoiceId ?? null,
-        correct_choice_id: correctChoiceId ?? null,
-        is_correct: isCorrect,
-        earned: isCorrect ? (q.score ?? 1) : 0,
-        max: q.score ?? 1,
-        type: q.type ?? "mcq",
-      };
+    (answers ?? []).forEach((a: any) => {
+      answerMap.set(a.question_id, a.selected_choice_id);
     });
 
-    // 5) ذخیره نتیجه
-    const { data: saved, error: sErr } = await supabase
-      .from("exam_results")
-      .upsert(
-        { student_id, exam_id, score, total },
-        { onConflict: "student_id,exam_id" }
-      )
-      .select()
-      .single();
+    // 3) جواب‌های صحیح
+    const { data: corrects, error: cErr } = await supabase
+      .from("correct_answers")
+      .select("question_id, correct_choice_id")
+      .in("question_id", questionIds);
 
-    if (sErr) throw sErr;
+    if (cErr) throw cErr;
+
+    const correctMap = new Map<number, number>();
+    (corrects ?? []).forEach((c: any) => {
+      correctMap.set(c.question_id, c.correct_choice_id);
+    });
+
+    // 4) محاسبه نمره
+    let score = 0;
+    let correctCount = 0;
+
+    for (const q of questions ?? []) {
+      const chosen = answerMap.get(q.id);
+      const correctChoice = correctMap.get(q.id);
+
+      if (chosen && correctChoice && chosen === correctChoice) {
+        score += q.score ?? 0;
+        correctCount += 1;
+      }
+    }
+
+    const questionCount = questionIds.length;
+
+    // 5) ذخیره در exam_results (insert or update)
+    const { data: existingResult, error: er1 } = await supabase
+      .from("exam_results")
+      .select("id")
+      .eq("student_id", student_id)
+      .eq("exam_id", exam_id)
+      .maybeSingle();
+
+    if (er1) throw er1;
+
+    if (existingResult?.id) {
+      const { error: updErr } = await supabase
+        .from("exam_results")
+        .update({ score, total })
+        .eq("id", existingResult.id);
+
+      if (updErr) throw updErr;
+    } else {
+      const { error: insErr } = await supabase
+        .from("exam_results")
+        .insert({ student_id, exam_id, score, total });
+
+      if (insErr) throw insErr;
+    }
 
     return NextResponse.json({
       ok: true,
-      result: saved,
-      details,
+      student_id,
+      exam_id,
+      score,
+      total,
+      correctCount,
+      questionCount,
     });
   } catch (err: any) {
     return NextResponse.json(
-      { error: err.message ?? "Server error" },
+      { error: err?.message ?? "Server error" },
       { status: 500 }
     );
   }
