@@ -17,15 +17,15 @@ export async function POST(req: Request) {
       );
     }
 
-    // اگر قبلاً برای این سوال جواب داده → update
-    const { data: existing, error: existingErr } = await supabase
+    // اگر قبلاً جواب داده، آپدیت کن (به خاطر unique(student_id, question_id))
+    const { data: existing, error: exErr } = await supabase
       .from("student_answers")
       .select("id")
       .eq("student_id", student_id)
       .eq("question_id", question_id)
       .maybeSingle();
 
-    if (existingErr) throw existingErr;
+    if (exErr) throw exErr;
 
     if (existing?.id) {
       const { data, error } = await supabase
@@ -39,14 +39,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ updated: true, answer: data });
     }
 
-    // در غیر اینصورت insert
+    // اگر جواب نداده، insert
     const { data, error } = await supabase
       .from("student_answers")
-      .insert({
-        student_id,
-        question_id,
-        selected_choice_id,
-      })
+      .insert({ student_id, question_id, selected_choice_id })
       .select()
       .single();
 
