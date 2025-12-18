@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import StudentClient from "./StudentClient";
 
+
 export default function StudentPage() {
   return (
     <Suspense
