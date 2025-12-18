@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 type Choice = {
   id: number;
@@ -9,282 +10,324 @@ type Choice = {
 
 type Question = {
   id: number;
-  exam_id: number;
   text: string;
-  type: "mcq" | "descriptive" | string;
-  score: number;
+  type?: string | null; // "mcq" | "text" | ...
+  score?: number | null;
   choices?: Choice[];
+  selected_choice_id?: number | null;
 };
 
-type GradeResult = {
-  score: number;
-  total: number;
-  correctCount?: number;
-  questionCount?: number;
-};
+type QuestionsApiResponse =
+  | { questions: Question[] }
+  | { data: Question[] }
+  | Question[];
 
-const STUDENT_ID = 1;
-const EXAM_ID = 1;
+async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, {
+    cache: "no-store",
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(init?.headers || {}),
+    },
+  });
+
+  // اگر خطا بود، متن خطا رو قشنگ برگردون
+  if (!res.ok) {
+    let msg = `${res.status}`;
+    try {
+      const t = await res.text();
+      msg = t ? `${t} (${res.status})` : `${res.status}`;
+    } catch {}
+    throw new Error(msg);
+  }
+
+  return res.json();
+}
 
 export default function StudentPage() {
-  const [questions, setQuestions] = useState<Question[]>([]);
-  const [answers, setAnswers] = useState<Record<number, number>>({}); // questionId -> choiceId
+  const searchParams = useSearchParams();
 
-  const [loadingQuestions, setLoadingQuestions] = useState(false);
-  const [savingQId, setSavingQId] = useState<number | null>(null);
+  // از querystring بگیر، اگر نبود پیش‌فرض 1
+  const examId = Number(searchParams.get("exam_id") || 1);
+  const studentId = Number(searchParams.get("student_id") || 1);
 
+  const [loading, setLoading] = useState(false);
   const [grading, setGrading] = useState(false);
-  const [grade, setGrade] = useState<GradeResult | null>(null);
 
-  const [error, setError] = useState<string | null>(null);
-  const [successMsg, setSuccessMsg] = useState<string | null>(null);
-
-  const totalScore = useMemo(
-    () => questions.reduce((sum, q) => sum + (q.score ?? 0), 0),
-    [questions]
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [selectedByQ, setSelectedByQ] = useState<Record<number, number | null>>(
+    {}
   );
 
-  async function fetchQuestions() {
-    setLoadingQuestions(true);
-    setError(null);
-    setSuccessMsg(null);
+  const [info, setInfo] = useState<string>("");
+  const [error, setError] = useState<string>("");
 
+  const totalScore = useMemo(() => {
+    return (questions || []).reduce((sum, q) => sum + (q.score ?? 0), 0);
+  }, [questions]);
+
+  const answeredCount = useMemo(() => {
+    const ids = Object.keys(selectedByQ);
+    let c = 0;
+    for (const k of ids) if (selectedByQ[Number(k)]) c++;
+    return c;
+  }, [selectedByQ]);
+
+  async function loadQuestions() {
+    setError("");
+    setInfo("");
+    setLoading(true);
     try {
-      // خیلی مهم: چون route.ts شما POST هست، اینجا هم POST می‌زنیم تا 405 نخوریم
-      const res = await fetch("/api/student/questions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ student_id: STUDENT_ID, exam_id: EXAM_ID }),
-      });
+      const url = `/api/student/questions?exam_id=${examId}&student_id=${studentId}`;
+      const data = await fetchJson<QuestionsApiResponse>(url, { method: "GET" });
 
-      const data = await res.json().catch(() => ({}));
+      const list: Question[] = Array.isArray(data)
+        ? data
+        : "questions" in (data as any)
+          ? ((data as any).questions as Question[])
+          : "data" in (data as any)
+            ? ((data as any).data as Question[])
+            : [];
 
-      if (!res.ok) {
-        throw new Error(data?.error || `Failed to fetch questions (${res.status})`);
+      setQuestions(list);
+
+      // مقداردهی اولیه انتخاب‌ها (اگر قبلا جواب ثبت شده باشد)
+      const map: Record<number, number | null> = {};
+      for (const q of list) {
+        map[q.id] = q.selected_choice_id ?? null;
       }
+      setSelectedByQ(map);
 
-      const list: Question[] = Array.isArray(data?.questions) ? data.questions : data;
-      setQuestions(list || []);
+      if (!list?.length) {
+        setInfo("سوالی پیدا نشد. اول با پنل معلم چند سوال اضافه کن 🙂");
+      } else {
+        setInfo("سوال‌ها با موفقیت لود شد ✅");
+      }
     } catch (e: any) {
-      setQuestions([]);
-      setError(e?.message ?? "Failed to fetch questions");
+      setError(`Failed to fetch questions: ${e?.message || "Error"}`);
     } finally {
-      setLoadingQuestions(false);
+      setLoading(false);
     }
   }
 
   async function saveAnswer(questionId: number, choiceId: number) {
-    setSavingQId(questionId);
-    setError(null);
-    setSuccessMsg(null);
-
+    setError("");
+    setInfo("");
     try {
-      const res = await fetch("/api/student/answers", {
+      await fetchJson(`/api/student/answers`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          student_id: STUDENT_ID,
+          student_id: studentId,
           question_id: questionId,
           selected_choice_id: choiceId,
         }),
       });
 
-      const data = await res.json().catch(() => ({}));
-
-      if (!res.ok) {
-        throw new Error(data?.error || `Failed to save answer (${res.status})`);
-      }
-
-      setSuccessMsg("✅ پاسخ ثبت شد");
+      setInfo("پاسخ ثبت شد ✅");
     } catch (e: any) {
-      setError(e?.message ?? "Failed to save answer");
-    } finally {
-      setSavingQId(null);
-      // پیام سبز بعد 1.5 ثانیه بره
-      setTimeout(() => setSuccessMsg(null), 1500);
+      setError(`ثبت پاسخ انجام نشد: ${e?.message || "Error"}`);
+      // اگر ثبت نشد، انتخاب رو برگردون عقب (اختیاری)
+      setSelectedByQ((prev) => ({ ...prev, [questionId]: prev[questionId] ?? null }));
     }
   }
 
-  async function gradeExamOnce() {
+  async function gradeExam() {
+    setError("");
+    setInfo("");
     setGrading(true);
-    setError(null);
-    setSuccessMsg(null);
-
     try {
-      // خیلی مهم: grade هم POST هست، پس POST
-      const res = await fetch("/api/student/grade", {
+      // مسیر درست شما: /api/student/grade (POST)
+      const result = await fetchJson<any>(`/api/student/grade`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ student_id: STUDENT_ID, exam_id: EXAM_ID }),
+        body: JSON.stringify({ student_id: studentId, exam_id: examId }),
       });
 
-      const data = await res.json().catch(() => ({}));
+      // نتیجه رو نمایش بده
+      const score =
+        result?.score ??
+        result?.data?.score ??
+        result?.result?.score ??
+        result?.total_score ??
+        null;
 
-      if (!res.ok) {
-        throw new Error(data?.error || `Grading failed (${res.status})`);
+      if (score !== null && score !== undefined) {
+        setInfo(`آزمون تصحیح شد ✅ نمره: ${score} از ${totalScore}`);
+      } else {
+        setInfo("آزمون تصحیح شد ✅");
       }
-
-      setGrade({
-        score: data?.score ?? 0,
-        total: data?.total ?? totalScore,
-        correctCount: data?.correctCount,
-        questionCount: data?.questionCount,
-      });
-
-      setSuccessMsg("✅ آزمون تصحیح شد");
     } catch (e: any) {
-      setError(e?.message ?? "Grading failed");
+      setError(`تصحیح انجام نشد: ${e?.message || "Error"}`);
     } finally {
       setGrading(false);
-      setTimeout(() => setSuccessMsg(null), 1500);
     }
   }
 
   useEffect(() => {
-    fetchQuestions();
+    // اولین بار خودکار سوال‌ها رو بگیر
+    loadQuestions();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [examId, studentId]);
 
   return (
-    <main className="min-h-screen bg-slate-50">
+    <div className="min-h-screen bg-slate-50 text-slate-900">
       <div className="mx-auto w-full max-w-3xl px-4 py-8">
         {/* Header */}
-        <div className="mb-6 text-right">
-          <h1 className="text-3xl font-extrabold tracking-tight text-slate-900">
+        <div className="mb-6 rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200">
+          <h1 className="text-3xl font-extrabold tracking-tight">
             صفحه دانش‌آموز
           </h1>
-          <div className="mt-2 text-sm text-slate-600">
-            آزمون #{EXAM_ID} — دانش‌آموز #{STUDENT_ID}
-          </div>
-        </div>
+          <p className="mt-2 text-sm text-slate-600">
+            آزمون #{examId} — دانش‌آموز #{studentId}
+          </p>
 
-        {/* Actions */}
-        <div className="mb-5 flex flex-wrap items-center justify-end gap-3">
-          <button
-            onClick={gradeExamOnce}
-            disabled={grading || loadingQuestions}
-            className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {grading ? "در حال تصحیح..." : "✅ پایان آزمون و تصحیح"}
-          </button>
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <button
+              onClick={gradeExam}
+              disabled={grading}
+              className="rounded-xl bg-slate-900 px-4 py-2 text-white shadow-sm transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {grading ? "در حال تصحیح..." : "✅ پایان آزمون و تصحیح"}
+            </button>
 
-          <button
-            onClick={fetchQuestions}
-            disabled={loadingQuestions}
-            className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {loadingQuestions ? "در حال دریافت..." : "🔁 فرش سوالات"}
-          </button>
-        </div>
+            <button
+              onClick={loadQuestions}
+              disabled={loading}
+              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-slate-900 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {loading ? "در حال دریافت..." : "🔁 فرش سوالات"}
+            </button>
 
-        {/* Alerts */}
-        {error && (
-          <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-right text-sm text-red-700">
-            {error}
-          </div>
-        )}
-        {successMsg && (
-          <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-right text-sm text-emerald-700">
-            {successMsg}
-          </div>
-        )}
-
-        {/* Summary */}
-        <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-4 text-right shadow-sm">
-          <div className="text-sm text-slate-600">مجموع امتیاز آزمون:</div>
-          <div className="mt-1 text-2xl font-bold text-slate-900">{totalScore}</div>
-
-          {grade && (
-            <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-              <div className="text-sm font-semibold text-emerald-800">🎉 نتیجه آزمون</div>
-              <div className="mt-2 text-lg font-bold text-emerald-900">
-                نمره: {grade.score} از {grade.total}
-              </div>
-              {(grade.correctCount != null || grade.questionCount != null) && (
-                <div className="mt-1 text-sm text-emerald-800">
-                  درست: {grade.correctCount ?? "-"} / کل: {grade.questionCount ?? "-"}
-                </div>
-              )}
+            <div className="ml-auto text-sm text-slate-600">
+              مجموع امتیاز:{" "}
+              <span className="font-bold text-slate-900">{totalScore}</span>
+              {"  "}
+              <span className="mx-2 text-slate-300">|</span>
+              پاسخ‌داده‌شده:{" "}
+              <span className="font-bold text-slate-900">{answeredCount}</span>
+              {" / "}
+              <span className="font-bold text-slate-900">{questions.length}</span>
             </div>
-          )}
+          </div>
+
+          {/* Alerts */}
+          {error ? (
+            <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {error}
+            </div>
+          ) : null}
+
+          {info ? (
+            <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+              {info}
+            </div>
+          ) : null}
         </div>
 
         {/* Questions */}
-        {loadingQuestions ? (
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 text-right shadow-sm">
-            در حال دریافت سوال‌ها...
-          </div>
-        ) : questions.length === 0 ? (
-          <div className="rounded-2xl border border-slate-200 bg-white p-6 text-right shadow-sm text-slate-700">
-            سوالی پیدا نشد. اول با دکمه‌های معلم چند سوال اضافه کن 😉
-          </div>
-        ) : (
-          <div className="space-y-4">
-            {questions.map((q) => {
-              const selected = answers[q.id];
+        <div className="space-y-4">
+          {questions?.length ? (
+            questions.map((q, idx) => {
+              const selected = selectedByQ[q.id] ?? null;
+              const isMcq =
+                (q.type || "").toLowerCase() === "mcq" ||
+                (q.choices?.length ?? 0) > 0;
 
               return (
                 <div
                   key={q.id}
-                  className="rounded-2xl border border-slate-200 bg-white p-5 text-right shadow-sm"
+                  className="rounded-2xl bg-white p-5 shadow-sm ring-1 ring-slate-200"
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="text-sm text-slate-500">امتیاز: {q.score ?? 0}</div>
-                    <div className="text-lg font-bold text-slate-900">
-                      سوال {q.id} <span className="text-slate-500">({q.type})</span>
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <div className="text-sm font-semibold text-slate-600">
+                        سوال {idx + 1}{" "}
+                        {q.type ? (
+                          <span className="ml-2 rounded-lg bg-slate-100 px-2 py-0.5 text-xs text-slate-700">
+                            {q.type}
+                          </span>
+                        ) : null}
+                      </div>
+
+                      <div className="mt-2 text-lg font-bold leading-8">
+                        {q.text}
+                      </div>
+                    </div>
+
+                    <div className="shrink-0 rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white">
+                      امتیاز: {q.score ?? 0}
                     </div>
                   </div>
 
-                  <div className="mt-2 text-base text-slate-800">{q.text}</div>
-
                   {/* MCQ */}
-                  {q.type === "mcq" && Array.isArray(q.choices) && q.choices.length > 0 && (
-                    <div className="mt-4 grid grid-cols-1 gap-2">
-                      {q.choices.map((c) => {
-                        const isSelected = selected === c.id;
-
+                  {isMcq ? (
+                    <div className="mt-4 space-y-2">
+                      {(q.choices || []).map((c) => {
+                        const active = selected === c.id;
                         return (
                           <button
                             key={c.id}
                             onClick={() => {
-                              // فقط انتخاب + ذخیره
-                              setAnswers((prev) => ({ ...prev, [q.id]: c.id }));
+                              setSelectedByQ((prev) => ({
+                                ...prev,
+                                [q.id]: c.id,
+                              }));
                               saveAnswer(q.id, c.id);
                             }}
-                            disabled={savingQId === q.id}
                             className={[
-                              "w-full rounded-xl border px-4 py-3 text-right text-sm font-semibold transition",
-                              isSelected
-                                ? "border-blue-300 bg-blue-50 text-blue-900"
-                                : "border-slate-200 bg-white text-slate-800 hover:bg-slate-50",
-                              savingQId === q.id ? "opacity-70" : "",
+                              "w-full rounded-xl border px-4 py-3 text-right transition",
+                              active
+                                ? "border-blue-300 bg-blue-50 ring-2 ring-blue-200"
+                                : "border-slate-200 bg-white hover:bg-slate-50",
                             ].join(" ")}
                           >
                             <div className="flex items-center justify-between gap-3">
-                              <span className="truncate">{c.text}</span>
-                              {isSelected && <span className="text-lg">✅</span>}
+                              <span className="text-sm font-medium">
+                                {c.text}
+                              </span>
+                              <span className="text-lg">
+                                {active ? "✅" : "⬜️"}
+                              </span>
                             </div>
                           </button>
                         );
                       })}
-                      {savingQId === q.id && (
-                        <div className="mt-1 text-xs text-slate-500">در حال ذخیره...</div>
-                      )}
+                      {!q.choices?.length ? (
+                        <div className="mt-2 text-sm text-slate-600">
+                          گزینه‌ای برای این سوال ثبت نشده.
+                        </div>
+                      ) : null}
                     </div>
-                  )}
-
-                  {/* Descriptive */}
-                  {q.type !== "mcq" && (
-                    <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
-                      این سوال تشریحی است (فعلاً فقط نمایش داده می‌شود).
+                  ) : (
+                    // Non-MCQ placeholder (فعلا چون جدول student_answers فقط choice_id دارد)
+                    <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                      این سوال تشریحی است. (برای تشریحی باید یک ستون/جدول جدا برای
+                      متن جواب اضافه کنیم.)
                     </div>
                   )}
                 </div>
               );
-            })}
-          </div>
-        )}
+            })
+          ) : (
+            <div className="rounded-2xl bg-white p-6 text-center shadow-sm ring-1 ring-slate-200">
+              <div className="text-lg font-bold">سوالی پیدا نشد</div>
+              <div className="mt-2 text-sm text-slate-600">
+                اول از بخش معلم چند سوال (MCQ) اضافه کن، بعد برگرد اینجا 😊
+              </div>
+              <button
+                onClick={loadQuestions}
+                className="mt-4 rounded-xl bg-slate-900 px-4 py-2 text-white shadow-sm"
+              >
+                🔁 تلاش دوباره
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="mt-8 text-center text-xs text-slate-400">
+          v1 — Student UI
+        </div>
       </div>
-    </main>
+    </div>
   );
 }
