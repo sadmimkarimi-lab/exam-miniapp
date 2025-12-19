@@ -6,123 +6,61 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-/**
- * GET /api/teacher/questions?exam_id=1
- * لیست سوالات یک آزمون (به همراه گزینه‌ها اگر وجود داشته باشند)
- */
+// GET /api/teacher/questions?exam_id=3
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
-  const exam_id = searchParams.get("exam_id");
+  const exam_id = Number(searchParams.get("exam_id"));
 
-  // ✅ اینجا باید !exam_id باشد (نه exam_id)
   if (!exam_id) {
-    return NextResponse.json(
-      { error: "exam_id is required" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "exam_id is required" }, { status: 400 });
   }
 
   const { data, error } = await supabase
     .from("questions")
-    .select(
-      `
-      *,
-      choices(*)
-    `
-    )
+    .select("*, choices(*)")
     .eq("exam_id", exam_id)
     .order("id", { ascending: true });
 
   if (error) {
-    return NextResponse.json(
-      { error: error.message },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  // خروجی تمیز و یکنواخت
-  const result =
-    (data ?? []).map((q: any) => ({
-      id: q.id,
-      exam_id: q.exam_id,
-      text: q.text,
-      score: q.score,
-      type: q.type,
-      choices: q.choices ?? [],
-    })) ?? [];
-
-  return NextResponse.json({ questions: result });
+  return NextResponse.json(data ?? []);
 }
 
-/**
- * POST /api/teacher/questions
- * body: { exam_id, text, score?, type? }
- * ساخت سوال جدید
- */
+// POST /api/teacher/questions
+// body: { exam_id, text, score, type }
 export async function POST(req: Request) {
-  const body = await req.json();
+  try {
+    const body = await req.json();
 
-  const exam_id = body.exam_id;
-  const text = body.text;
+    const exam_id = Number(body.exam_id);
+    const text = String(body.text ?? "").trim();
+    const score = Number(body.score ?? 1);
+    const type = (body.type === "desc" ? "desc" : "mcq") as "mcq" | "desc";
 
-  // پیش‌فرض‌ها (برای اینکه UI ساده کار کنه)
-  const score = body.score ?? 1;
-  const type = body.type ?? "mcq";
+    if (!exam_id || !text) {
+      return NextResponse.json(
+        { error: "exam_id and text are required" },
+        { status: 400 }
+      );
+    }
 
-  if (!exam_id || !text) {
+    const { data, error } = await supabase
+      .from("questions")
+      .insert([{ exam_id, text, score, type }])
+      .select("*, choices(*)")
+      .single();
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    return NextResponse.json(data);
+  } catch (e: any) {
     return NextResponse.json(
-      { error: "exam_id and text are required" },
+      { error: e?.message || "Invalid JSON body" },
       { status: 400 }
     );
   }
-
-  const { data, error } = await supabase
-    .from("questions")
-    .insert({
-      exam_id,
-      text,
-      score,
-      type,
-    })
-    .select()
-    .single();
-
-  if (error) {
-    return NextResponse.json(
-      { error: error.message },
-      { status: 500 }
-    );
-  }
-
-  return NextResponse.json(data);
-}
-
-/**
- * DELETE /api/teacher/questions?id=123
- * حذف یک سوال با id
- */
-export async function DELETE(req: Request) {
-  const { searchParams } = new URL(req.url);
-  const id = searchParams.get("id");
-
-  if (!id) {
-    return NextResponse.json(
-      { error: "id is required" },
-      { status: 400 }
-    );
-  }
-
-  const { error } = await supabase
-    .from("questions")
-    .delete()
-    .eq("id", id);
-
-  if (error) {
-    return NextResponse.json(
-      { error: error.message },
-      { status: 500 }
-    );
-  }
-
-  return NextResponse.json({ ok: true });
 }
