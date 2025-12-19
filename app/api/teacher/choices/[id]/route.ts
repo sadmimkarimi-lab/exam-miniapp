@@ -13,19 +13,12 @@ export async function DELETE(
   req: Request,
   { params }: { params: { id: string } }
 ) {
-  const { id } = params;
-
-  if (!id) {
-    return NextResponse.json(
-      { error: "choice id is required" },
-      { status: 400 }
-    );
-  }
+  const choiceId = params.id;
 
   const { error } = await supabase
     .from("choices")
     .delete()
-    .eq("id", id);
+    .eq("id", choiceId);
 
   if (error) {
     return NextResponse.json(
