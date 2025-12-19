@@ -8,12 +8,13 @@ const supabase = createClient(
 
 /**
  * GET /api/teacher/questions?exam_id=1
- * برای صفحه دانش‌آموز
+ * لیست سوالات یک آزمون (به همراه گزینه‌ها اگر وجود داشته باشند)
  */
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const exam_id = searchParams.get("exam_id");
 
+  // ✅ اینجا باید !exam_id باشد (نه exam_id)
   if (!exam_id) {
     return NextResponse.json(
       { error: "exam_id is required" },
@@ -26,7 +27,7 @@ export async function GET(req: Request) {
     .select(
       `
       *,
-      choices (*)
+      choices(*)
     `
     )
     .eq("exam_id", exam_id)
@@ -39,29 +40,41 @@ export async function GET(req: Request) {
     );
   }
 
-  // فرمت مناسب UI دانش‌آموز
-  const result = data.map((q: any) => ({
-    question: {
+  // خروجی تمیز و یکنواخت
+  const result =
+    (data ?? []).map((q: any) => ({
       id: q.id,
       exam_id: q.exam_id,
       text: q.text,
       score: q.score,
       type: q.type,
-    },
-    choices: q.choices ?? [],
-  }));
+      choices: q.choices ?? [],
+    })) ?? [];
 
-  return NextResponse.json(result);
+  return NextResponse.json({ questions: result });
 }
 
 /**
  * POST /api/teacher/questions
- * برای معلم (قبلاً داشتی، دست نمی‌زنیم)
+ * body: { exam_id, text, score?, type? }
+ * ساخت سوال جدید
  */
 export async function POST(req: Request) {
   const body = await req.json();
 
-  const { exam_id, text, score, type } = body;
+  const exam_id = body.exam_id;
+  const text = body.text;
+
+  // پیش‌فرض‌ها (برای اینکه UI ساده کار کنه)
+  const score = body.score ?? 1;
+  const type = body.type ?? "mcq";
+
+  if (!exam_id || !text) {
+    return NextResponse.json(
+      { error: "exam_id and text are required" },
+      { status: 400 }
+    );
+  }
 
   const { data, error } = await supabase
     .from("questions")
@@ -82,4 +95,34 @@ export async function POST(req: Request) {
   }
 
   return NextResponse.json(data);
+}
+
+/**
+ * DELETE /api/teacher/questions?id=123
+ * حذف یک سوال با id
+ */
+export async function DELETE(req: Request) {
+  const { searchParams } = new URL(req.url);
+  const id = searchParams.get("id");
+
+  if (!id) {
+    return NextResponse.json(
+      { error: "id is required" },
+      { status: 400 }
+    );
+  }
+
+  const { error } = await supabase
+    .from("questions")
+    .delete()
+    .eq("id", id);
+
+  if (error) {
+    return NextResponse.json(
+      { error: error.message },
+      { status: 500 }
+    );
+  }
+
+  return NextResponse.json({ ok: true });
 }
