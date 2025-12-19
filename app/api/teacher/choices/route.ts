@@ -11,40 +11,46 @@ const supabase = createClient(
  * body: { question_id, text, is_correct }
  */
 export async function POST(req: Request) {
-  const body = await req.json();
-  const { question_id, text, is_correct } = body;
+  try {
+    const { question_id, text, is_correct } = await req.json();
 
-  if (!question_id || !text) {
+    if (!question_id || !text) {
+      return NextResponse.json(
+        { error: "question_id and text are required" },
+        { status: 400 }
+      );
+    }
+
+    // اگر این گزینه جواب صحیحه → بقیه گزینه‌ها false بشن
+    if (is_correct === true) {
+      await supabase
+        .from("choices")
+        .update({ is_correct: false })
+        .eq("question_id", question_id);
+    }
+
+    const { data, error } = await supabase
+      .from("choices")
+      .insert({
+        question_id,
+        text,
+        is_correct,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json(data);
+  } catch (err) {
     return NextResponse.json(
-      { error: "question_id and text are required" },
+      { error: "Invalid request body" },
       { status: 400 }
     );
   }
-
-  // اگر این گزینه درست است، بقیه گزینه‌های سوال را غلط کن
-  if (is_correct) {
-    await supabase
-      .from("choices")
-      .update({ is_correct: false })
-      .eq("question_id", question_id);
-  }
-
-  const { data, error } = await supabase
-    .from("choices")
-    .insert({
-      question_id,
-      text,
-      is_correct: !!is_correct,
-    })
-    .select()
-    .single();
-
-  if (error) {
-    return NextResponse.json(
-      { error: error.message },
-      { status: 500 }
-    );
-  }
-
-  return NextResponse.json(data);
 }
