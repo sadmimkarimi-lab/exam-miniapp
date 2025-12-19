@@ -6,58 +6,44 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!
 );
 
-// (اختیاری) GET برای تست سریع
+const TEACHER_ID = 1;
+
 export async function GET() {
-  const { data, error } = await supabase
-    .from("exams")
-    .select("*")
-    .order("created_at", { ascending: false })
-    .limit(20);
+  try {
+    const { data, error } = await supabase
+      .from("exams")
+      .select("id, title, teacher_id, show_result_to_student, is_published, created_at")
+      .eq("teacher_id", TEACHER_ID)
+      .order("id", { ascending: false });
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    if (error) throw error;
+
+    return NextResponse.json({ ok: true, exams: data ?? [] });
+  } catch (err: any) {
+    return NextResponse.json({ ok: false, error: err?.message ?? "Server error" }, { status: 500 });
   }
-
-  return NextResponse.json({ exams: data });
 }
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json();
-
-    // UI شما teacher_id می‌فرسته
-    const { teacher_id, title } = body;
-
-    if (!teacher_id || !title) {
-      return NextResponse.json(
-        { error: "teacher_id و title الزامی است" },
-        { status: 400 }
-      );
-    }
-
-    // ✅ ستون واقعی دیتابیس: creator_user_id
-    const payload = {
-      creator_user_id: Number(teacher_id),
-      title: String(title),
-      is_published: false,
-      // duration_min: null, // اگر خواستی بعداً اضافه کن
-    };
+    const body = await req.json().catch(() => ({}));
+    const title = (body?.title ?? "آزمون جدید").toString();
 
     const { data, error } = await supabase
       .from("exams")
-      .insert(payload)
-      .select("*")
+      .insert({
+        teacher_id: TEACHER_ID,
+        title,
+        show_result_to_student: false,
+        is_published: false,
+      })
+      .select("id")
       .single();
 
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
+    if (error) throw error;
 
-    return NextResponse.json({ exam: data });
+    return NextResponse.json({ ok: true, exam_id: data.id });
   } catch (err: any) {
-    return NextResponse.json(
-      { error: err?.message || "Server Error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ ok: false, error: err?.message ?? "Server error" }, { status: 500 });
   }
 }
