@@ -3,18 +3,17 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 
-type Choice = {
-  id: number;
-  text: string;
-  is_correct: boolean;
-};
-
 type Question = {
   id: number;
   text: string;
   type: "mcq" | "desc";
-  score: number;
   choices: Choice[];
+};
+
+type Choice = {
+  id: number;
+  text: string;
+  is_correct: boolean;
 };
 
 export default function QuestionsPage() {
@@ -23,20 +22,17 @@ export default function QuestionsPage() {
   const [text, setText] = useState("");
   const [type, setType] = useState<"mcq" | "desc">("mcq");
 
-  async function load() {
-    const res = await fetch(`/api/teacher/questions?exam_id=${examId}`, {
-      cache: "no-store",
-    });
-    const j = await res.json();
-    setQuestions(j.questions ?? []);
-  }
+  useEffect(() => {
+    fetch(`/api/teacher/questions?exam_id=${examId}`)
+      .then(res => res.json())
+      .then(setQuestions);
+  }, [examId]);
 
   async function addQuestion() {
-    if (!text) return alert("متن سوال خالیه");
+    if (!text) return;
 
     await fetch("/api/teacher/questions", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         exam_id: examId,
         text,
@@ -46,84 +42,73 @@ export default function QuestionsPage() {
     });
 
     setText("");
-    load();
+    location.reload();
   }
 
   async function deleteQuestion(id: number) {
-    if (!confirm("سوال حذف شود؟")) return;
     await fetch(`/api/teacher/questions/${id}`, { method: "DELETE" });
-    load();
+    location.reload();
   }
 
-  async function addChoice(question: Question, text: string, isCorrect: boolean) {
-    if (question.choices.length >= 4)
-      return alert("حداکثر ۴ گزینه مجاز است");
-
+  async function addChoice(questionId: number, text: string, isCorrect: boolean) {
     await fetch("/api/teacher/choices", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        question_id: question.id,
+        question_id: questionId,
         text,
         is_correct: isCorrect,
       }),
     });
-
-    load();
+    location.reload();
   }
 
   async function deleteChoice(id: number) {
     await fetch(`/api/teacher/choices/${id}`, { method: "DELETE" });
-    load();
+    location.reload();
   }
 
-  useEffect(() => {
-    load();
-  }, []);
-
   return (
-    <div dir="rtl" style={{ maxWidth: 800, margin: "0 auto", padding: 16 }}>
+    <div style={{ padding: 20 }}>
       <h2>سوالات آزمون #{examId}</h2>
 
-      {/* افزودن سوال */}
-      <div style={{ background: "#fff", padding: 12, borderRadius: 12 }}>
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder="متن سوال..."
-          style={{ width: "100%", padding: 8 }}
-        />
+      <textarea
+        placeholder="متن سوال"
+        value={text}
+        onChange={e => setText(e.target.value)}
+      />
 
-        <select value={type} onChange={(e) => setType(e.target.value as any)}>
-          <option value="mcq">چهارگزینه‌ای</option>
-          <option value="desc">تشریحی</option>
-        </select>
+      <br />
 
-        <button onClick={addQuestion}>➕ افزودن سوال</button>
-      </div>
+      <select value={type} onChange={e => setType(e.target.value as any)}>
+        <option value="mcq">چهارگزینه‌ای</option>
+        <option value="desc">تشریحی</option>
+      </select>
 
-      {/* لیست سوالات */}
-      {questions.map((q) => (
-        <div key={q.id} style={{ background: "#f9f9f9", marginTop: 16, padding: 12, borderRadius: 12 }}>
-          <div style={{ display: "flex", justifyContent: "space-between" }}>
-            <b>{q.text}</b>
-            <button onClick={() => deleteQuestion(q.id)}>🗑 حذف سوال</button>
-          </div>
+      <br />
+      <button onClick={addQuestion}>➕ افزودن سوال</button>
 
-          {/* گزینه‌ها */}
+      <hr />
+
+      {questions.map(q => (
+        <div key={q.id} style={{ border: "1px solid #ccc", padding: 10 }}>
+          <b>{q.text}</b> ({q.type})
+          <button onClick={() => deleteQuestion(q.id)}>🗑 حذف سوال</button>
+
           {q.type === "mcq" && (
-            <div style={{ marginTop: 10 }}>
-              {q.choices.map((c) => (
-                <div key={c.id} style={{ display: "flex", gap: 8 }}>
-                  <span>{c.text} {c.is_correct && "✅"}</span>
+            <>
+              {q.choices.map(c => (
+                <div key={c.id}>
+                  {c.text} {c.is_correct && "✅"}
                   <button onClick={() => deleteChoice(c.id)}>❌</button>
                 </div>
               ))}
 
               {q.choices.length < 4 && (
-                <AddChoiceForm onAdd={(t, ok) => addChoice(q, t, ok)} />
+                <AddChoiceForm
+                  onAdd={(t, c) => addChoice(q.id, t, c)}
+                />
               )}
-            </div>
+            </>
           )}
         </div>
       ))}
@@ -131,19 +116,37 @@ export default function QuestionsPage() {
   );
 }
 
-function AddChoiceForm({ onAdd }: { onAdd: (text: string, ok: boolean) => void }) {
+function AddChoiceForm({
+  onAdd,
+}: {
+  onAdd: (text: string, isCorrect: boolean) => void;
+}) {
   const [text, setText] = useState("");
-  const [ok, setOk] = useState(false);
+  const [correct, setCorrect] = useState(false);
 
   return (
-    <div style={{ marginTop: 8 }}>
-      <input value={text} onChange={(e) => setText(e.target.value)} placeholder="متن گزینه" />
+    <div>
+      <input
+        placeholder="متن گزینه"
+        value={text}
+        onChange={e => setText(e.target.value)}
+      />
       <label>
-        <input type="checkbox" checked={ok} onChange={(e) => setOk(e.target.checked)} />
-        جواب صحیح
+        <input
+          type="checkbox"
+          checked={correct}
+          onChange={e => setCorrect(e.target.checked)}
+        />
+        صحیح
       </label>
-      <button onClick={() => { onAdd(text, ok); setText(""); setOk(false); }}>
-        ➕ افزودن گزینه
+      <button
+        onClick={() => {
+          onAdd(text, correct);
+          setText("");
+          setCorrect(false);
+        }}
+      >
+        افزودن گزینه
       </button>
     </div>
   );
